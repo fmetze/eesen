@@ -61,11 +61,12 @@ if __name__ == '__main__':
     --target-num : int
         Number of labels as the targets
         Required.
-    --block-softmax-dims
-	Generate <BlockSoftmax> with dims D1:D2:D3 [default: %default]
+    --block-softmax-dims : int
+	Generate <BlockSoftmax> with dims D1:D2:D3 [default: %default].
+        Optional.
     --param-range : float
         Range to randomly draw the initial values of model parameters. For example, setting it to
-        0.1 means model parameters are drawn uniformly from [-0.1, 0.1]
+        0.1 means model parameters are drawn uniformly from [-0.1, 0.1].
         Optional. By default it is set to 0.1.
     --lstm-type : string
         Type of LSTMs. Optional. Either "bi" (bi-directional) or "uni" (uni-directional). By default,
@@ -78,6 +79,12 @@ if __name__ == '__main__':
         Optional.
     --projection-dim : int
         Project the feature vector down to a given dimensionality between LSTM layers.
+        Optional.
+    --preconditioned : string
+        "yes" if you want to make the affine layers preconditioned.
+        Optional.
+    --preconditioned-bilstm : string
+        "yes" if you want to make the bilstm preconditioned.
         Optional.
     --affine-learn-rate : float
         Scale the learning rate by this amount for affine layers.
@@ -107,9 +114,15 @@ if __name__ == '__main__':
 
     actual_cell_dim = 2*lstm_cell_dim
     model_type = '<BiLstmParallel>'   # by default
+    if arguments.has_key('preconditioned_bilstm') and arguments['preconditioned_bilstm'] == 'yes':
+        model_type = '<BiLstmParallelPreconditioned>'
     if arguments.has_key('lstm_type') and arguments['lstm_type'] == 'uni':
         actual_cell_dim = lstm_cell_dim
         model_type = '<LstmParallel>'
+
+    affine_type = '<AffineTransform>'
+    if arguments.has_key('preconditioned') and arguments['preconditioned'] == 'yes':
+        affine_type = '<AffineTransformPrecond>'
 
     # add the option to specify variable learning rates
     learn_rate_slope = 0.0
@@ -138,7 +151,7 @@ if __name__ == '__main__':
 
     # optional dimensionality reduction layer, if 'input_dim' is defined
     try:
-        print '<AffineTransform> <InputDim> ' + str(input_feat_dim) + ' <OutputDim> ' + str(input_dim) + common_args(n=0,type="affine")
+        print affine_type + ' <InputDim> ' + str(input_feat_dim) + ' <OutputDim> ' + str(input_dim) + common_args(n=0,type="affine")
         input_feat_dim = input_dim
     except:
         pass
@@ -150,13 +163,13 @@ if __name__ == '__main__':
     for n in range(1, lstm_layer_num):
         try:
             # proj_dim is defined, so we use projection layers
-            print '<AffineTransform> <InputDim> ' + str(actual_cell_dim) + ' <OutputDim> ' + str(proj_dim) + common_args(n=n,type="affine")
+            print affine_type + ' <InputDim> ' + str(actual_cell_dim) + ' <OutputDim> ' + str(proj_dim) + common_args(n=n,type="affine")
             print model_type + ' <InputDim> ' +        str(proj_dim) + ' <CellDim> ' + str(actual_cell_dim) + common_args(n=n)
         except:
             print model_type + ' <InputDim> ' + str(actual_cell_dim) + ' <CellDim> ' + str(actual_cell_dim) + common_args(n=n)
 
     # the final affine-transform and (block-)softmax layer
-    print '<AffineTransform> <InputDim> ' + str(actual_cell_dim) + ' <OutputDim> ' + str(target_num) + common_args(n=lstm_layer_num-1,type="affine")
+    print affine_type + ' <InputDim> ' + str(actual_cell_dim) + ' <OutputDim> ' + str(target_num) + common_args(n=lstm_layer_num-1,type="affine")
     if type(ddims) == list:
 	assert(sum(ddims) == target_num)
 	print '<BlockSoftmax> <InputDim> ' + str(target_num) + ' <OutputDim> ' + str(target_num) + ' <BlockDims> ' + arguments['block_softmax_dims']
