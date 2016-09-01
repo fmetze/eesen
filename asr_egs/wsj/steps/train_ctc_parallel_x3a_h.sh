@@ -11,7 +11,7 @@ train_tool=train-ctc-parallel  # the command for training; by default, we use th
                 # parallel version which processes multiple utterances at the same time
 
 # configs for multiple sequences
-num_sequence=20          # during training, how many utterances to be processed in parallel
+num_sequence=60          # during training, how many utterances to be processed in parallel
 valid_num_sequence=60    # number of parallel sequences in validation
 frame_num_limit=30000    # the number of frames to be processed at a time in training; this config acts to
          # to prevent running out of GPU memory if #num_sequence very long sequences are processed;the max
@@ -22,26 +22,29 @@ learn_rate=4e-5          # learning rate
 final_learn_rate=1e-6    # final learning rate
 momentum=0.9             # momentum
 
+# parallelization settings
+nj=4                     # number of jobs in parallel
+utts_per_avg=1000        # number of utterances per averaging step
+
 # learning rate schedule
 max_iters=25             # max number of iterations
 min_iters=               # min number of iterations
 start_epoch_num=1        # start from which epoch, used for resuming training from a break point
 
-start_halving_inc=0.1    # start halving learning rates when the accuracy improvement falls below this amount
-end_training_inc=0       # terminate training when the accuracy improvement falls below this amount
+start_halving_inc=0.2    # start halving learning rates when the accuracy improvement falls below this amount
+end_training_inc=0.02    # terminate training when the accuracy improvement falls below this amount
 halving_factor=0.5       # learning rate decay factor
 halving_after_epoch=10   # halving becomes enabled after this many epochs
 force_halving_epoch=     # force halving after this epoch
 
 # logging
-report_step=1000         # during training, the step (number of utterances) of reporting objective and accuracy
+report_step=5000         # during training, the step (number of utterances) of reporting objective and accuracy
 verbose=1
 
 # feature configs
 sort_by_len=true         # whether to sort the utterances by their lengths
 seed=777                 # random seed
 block_softmax=false      # multi-lingual training
-shuffle=false            # shuffle feature order after first iteration
 
 splice_feats=false       # whether to splice neighboring frams
 subsample_feats=false    # whether to subsample features
@@ -145,8 +148,8 @@ if $subsample_feats; then
   sed 's/^/1x/' $tmpdir/cv1local.scp >> $tmpdir/cv_local.scp
   sed 's/^/2x/' $tmpdir/cv2local.scp >> $tmpdir/cv_local.scp
 
-  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/train_local.scp ark:- |"
-  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/cv_local.scp ark:- |"
+  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
+  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
 
   gzip -cd $dir/labels.tr.gz | sed 's/^/0x/'  > $tmpdir/labels.tr
   gzip -cd $dir/labels.cv.gz | sed 's/^/0x/'  > $tmpdir/labels.cv
@@ -165,8 +168,8 @@ elif $copy_feats; then
   tmpdir=$(mktemp -d)
   copy-feats "$feats_tr" ark,scp:$tmpdir/train.ark,$tmpdir/train_local.scp || exit 1;
   copy-feats "$feats_cv" ark,scp:$tmpdir/cv.ark,$tmpdir/cv_local.scp || exit 1;
-  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/train_local.scp ark:- |"
-  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/cv_local.scp ark:- |"
+  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
+  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
 
   trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
 fi
@@ -183,6 +186,12 @@ if [ ! -f $dir/nnet/nnet.iter0 ]; then
     net-initialize --binary=true --seed=$seed $dir/nnet.proto $dir/nnet/nnet.iter0 >& $dir/log/initialize_model.log || exit 1;
 fi
 
+# create another tmp directory for the averaging and shuffling operations
+mkdir -p $tmpdir/avg $tmpdir/shuffle
+cp $dir/nnet/nnet.iter$[start_epoch_num-1] $tmpdir/avg || exit 1;
+cp $tmpdir/train_local.scp $tmpdir/train_local.org
+cp $tmpdir/cv_local.scp    $tmpdir/cv_local.org
+
 # main loop
 cur_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
 echo "TRAINING STARTS [$cur_time]"
@@ -191,27 +200,42 @@ for iter in $(seq $start_epoch_num $max_iters); do
     hvacc=$pvacc
     pvacc=$cvacc
 
+    # distribute and shuffle the data for this iteration
+    local/prep_scps.sh --nj $nj --cmd "run.pl" --seed $iter \
+	$tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
+        $dir/log/shuffle.iter$iter.log
+    rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
+    
     # train
     echo -n "EPOCH $iter RUNNING ... "
-    $train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
-        --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose --block-softmax=$block_softmax \
-        "$feats_tr" "$labels_tr" $dir/nnet/nnet.iter$[iter-1] $dir/nnet/nnet.iter${iter} \
-        >& $dir/log/tr.iter$iter.log || exit 1;
-
+    for JOB in `seq 1 $nj`; do
+	$train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
+            --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose --block-softmax=$block_softmax \
+            --num-jobs=$nj --job-id=$JOB `echo $feats_tr|awk -v j=$JOB '{sub("JOB", j); print $0}'` \
+	    "$labels_tr" $dir/nnet/nnet.iter$[iter-1] $dir/nnet/nnet.iter${iter} \
+            >& $dir/log/tr.iter$iter.$JOB.log &
+	sleep 15
+    done
+    cp $tmpdir/avg/nnet.iter$[iter-1] $dir/nnet
+    wait
     end_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
     echo -n "ENDS [$end_time]: "
 
-    tracc=$(cat $dir/log/tr.iter${iter}.log | grep -a "TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
+    tracc=$(cat $dir/log/tr.iter${iter}.1.log | grep -a "TOTAL TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
     echo -n "lrate $(printf "%.6g" $learn_rate), TRAIN ACCURACY $(printf "%.4f" $tracc)%, "
 
     # validation
-    $train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
-        --cross-validate=true --block-softmax=$block_softmax \
-        --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
-        "$feats_cv" "$labels_cv" $dir/nnet/nnet.iter${iter} \
-        >& $dir/log/cv.iter$iter.log || exit 1;
-
-    cvacc=$(cat $dir/log/cv.iter${iter}.log | grep -a "TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
+    for JOB in `seq 1 $nj`; do
+	$train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
+            --cross-validate=true --block-softmax=$block_softmax \
+            --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
+	    --num-jobs=$nj --job-id=$JOB `echo $feats_cv|awk -v j=$JOB '{sub("JOB", j); print $0}'` \
+            "$labels_cv" $dir/nnet/nnet.iter${iter} \
+            >& $dir/log/cv.iter$iter.$JOB.log &
+	sleep 15
+    done
+    wait
+    cvacc=$(cat $dir/log/cv.iter${iter}.1.log | grep -a "TOTAL TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
     echo "VALID ACCURACY $(printf "%.4f" $cvacc)%"
 
     # stopping criterion
@@ -237,19 +261,6 @@ for iter in $(seq $start_epoch_num $max_iters); do
     if $halving; then
       learn_rate=$(awk "BEGIN {print($learn_rate*$halving_factor)}")
       learn_rate=$(awk "BEGIN {if ($learn_rate<$final_learn_rate) {print $final_learn_rate} else {print $learn_rate}}")
-    fi
-
-    # re-shuffle the data for the next iteration
-    if $shuffle; then
-	mkdir -p $tmpdir/shuffle
-	[ -f $tmpdir/train_local.org ] || cp $tmpdir/train_local.scp $tmpdir/train_local.org
-	[ -f $tmpdir/cv_local.org    ] || cp $tmpdir/cv_local.scp    $tmpdir/cv_local.org
-	local/prep_scps.sh --nj 1 --cmd "run.pl" --seed $iter \
-	    $tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
-	    $dir/log/shuffle.iter$iter.log
-	mv $tmpdir/feats_tr.1.scp $tmpdir/train_local.scp
-	mv $tmpdir/feats_cv.1.scp $tmpdir/cv_local.scp
-	rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
     fi
 
     # save the status
