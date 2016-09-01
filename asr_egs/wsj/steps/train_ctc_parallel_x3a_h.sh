@@ -203,7 +203,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
     # distribute and shuffle the data for this iteration
     local/prep_scps.sh --nj $nj --cmd "run.pl" --seed $iter \
 	$tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
-        $dir/log/shuffle.iter$iter.log
+        $dir/log/shuffle.iter$iter.log || exit 1;
     rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
     
     # train
@@ -212,15 +212,14 @@ for iter in $(seq $start_epoch_num $max_iters); do
 	$train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
             --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose --block-softmax=$block_softmax \
             --num-jobs=$nj --job-id=$JOB `echo $feats_tr|awk -v j=$JOB '{sub("JOB", j); print $0}'` \
-	    "$labels_tr" $dir/nnet/nnet.iter$[iter-1] $dir/nnet/nnet.iter${iter} \
+	    "$labels_tr" $tmpdir/avg/nnet.iter$[iter-1] $tmpdir/avg/nnet.iter${iter} \
             >& $dir/log/tr.iter$iter.$JOB.log &
 	sleep 15
     done
-    cp $tmpdir/avg/nnet.iter$[iter-1] $dir/nnet
+    cp $tmpdir/avg/nnet.iter$iter $dir/nnet
     wait
     end_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
     echo -n "ENDS [$end_time]: "
-
     tracc=$(cat $dir/log/tr.iter${iter}.1.log | grep -a "TOTAL TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
     echo -n "lrate $(printf "%.6g" $learn_rate), TRAIN ACCURACY $(printf "%.4f" $tracc)%, "
 
@@ -230,7 +229,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
             --cross-validate=true --block-softmax=$block_softmax \
             --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
 	    --num-jobs=$nj --job-id=$JOB `echo $feats_cv|awk -v j=$JOB '{sub("JOB", j); print $0}'` \
-            "$labels_cv" $dir/nnet/nnet.iter${iter} \
+            "$labels_cv" $tmpdir/avg/nnet.iter${iter} \
             >& $dir/log/cv.iter$iter.$JOB.log &
 	sleep 15
     done
