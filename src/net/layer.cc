@@ -24,6 +24,7 @@
 #include "net/sigmoid-layer.h"
 #include "net/tanh-layer.h"
 #include "net/affine-trans-layer.h"
+#include "net/cond-layer.h"
 #include "net/utils-functions.h"
 #include "net/bilstm-layer.h"
 #include "net/bilstm-parallel-layer.h"
@@ -36,8 +37,12 @@ namespace eesen {
 
 const struct Layer::key_value Layer::kMarkerMap[] = {
   { Layer::l_Affine_Transform,"<AffineTransform>" },
+  { Layer::l_Affine_Transform_Cond,"<AffineTransformCond>" },
+  { Layer::l_Affine_Transform_Precond,"<AffineTransformPrecond>" },
+  { Layer::l_Affine_Transform_Precond_Online,"<AffineTransformPrecondOnline>" },
   { Layer::l_BiLstm,"<BiLstm>"},
   { Layer::l_BiLstm_Parallel,"<BiLstmParallel>"},
+  { Layer::l_BiLstm_Parallel_Preconditioned,"<BiLstmParallelPreconditioned>"},
   { Layer::l_Lstm,"<Lstm>"},
   { Layer::l_Lstm_Parallel,"<LstmParallel>"},
   { Layer::l_Softmax,"<Softmax>" },
@@ -78,11 +83,20 @@ Layer* Layer::NewLayerOfType(LayerType layer_type,
     case Layer::l_Affine_Transform :
       layer = new AffineTransform(input_dim, output_dim); 
       break;
+    case Layer::l_Affine_Transform_Cond :
+      layer = new AffineTransformCond(input_dim, output_dim);
+      break;
+    case Layer::l_Affine_Transform_Precond :
+      layer = new AffineTransformPreconditioned(input_dim, output_dim);
+      break;
     case Layer::l_BiLstm :
       layer = new BiLstm(input_dim, output_dim);
       break;
     case Layer::l_BiLstm_Parallel :
       layer = new BiLstmParallel(input_dim, output_dim);
+      break;
+    case Layer::l_BiLstm_Parallel_Preconditioned :
+      layer = new BiLstmParallelPreconditioned(input_dim, output_dim);
       break;
     case Layer::l_Lstm :
       layer = new Lstm(input_dim, output_dim);

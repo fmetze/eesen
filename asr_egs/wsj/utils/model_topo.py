@@ -81,10 +81,7 @@ if __name__ == '__main__':
         Project the feature vector down to a given dimensionality between LSTM layers.
         Optional.
     --preconditioned : string
-        "yes" if you want to make the affine layers preconditioned.
-        Optional.
-    --preconditioned-bilstm : string
-        "yes" if you want to make the bilstm preconditioned.
+        "yes|affine|bilstm" if you want to make all or just some layers preconditioned.
         Optional.
     --affine-learn-rate : float
         Scale the learning rate by this amount for affine layers.
@@ -114,14 +111,14 @@ if __name__ == '__main__':
 
     actual_cell_dim = 2*lstm_cell_dim
     model_type = '<BiLstmParallel>'   # by default
-    if arguments.has_key('preconditioned_bilstm') and arguments['preconditioned_bilstm'] == 'yes':
+    if arguments.has_key('preconditioned') and re.search('bilstm|yes', arguments['preconditioned']):
         model_type = '<BiLstmParallelPreconditioned>'
     if arguments.has_key('lstm_type') and arguments['lstm_type'] == 'uni':
         actual_cell_dim = lstm_cell_dim
         model_type = '<LstmParallel>'
 
     affine_type = '<AffineTransform>'
-    if arguments.has_key('preconditioned') and arguments['preconditioned'] == 'yes':
+    if arguments.has_key('preconditioned') and re.search('affine|yes', arguments['preconditioned']):
         affine_type = '<AffineTransformPrecond>'
 
     # add the option to specify variable learning rates

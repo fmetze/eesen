@@ -51,6 +51,8 @@ class MatrixBase {
   friend class CuMatrix<Real>;
   friend class CuSubMatrix<Real>;
 
+  friend class CuPackedMatrix<Real>;
+  friend class PackedMatrix<Real>;
   /// Returns number of rows (or zero for emtpy matrix).
   inline MatrixIndexT  NumRows() const { return num_rows_; }
 
@@ -139,6 +141,15 @@ class MatrixBase {
   template<typename OtherReal>  
   void CopyFromMat(const CuMatrixBase<OtherReal> &M,
                    MatrixTransposeType trans = kNoTrans);
+
+  /// Copy given spmatrix. (no resize is done).
+  template<typename OtherReal>
+  void CopyFromSp(const SpMatrix<OtherReal> &M);
+
+  /// Copy given tpmatrix. (no resize is done).
+  template<typename OtherReal>
+  void CopyFromTp(const TpMatrix<OtherReal> &M,
+                  MatrixTransposeType trans = kNoTrans);
 
   /// Inverse of vec() operator. Copies vector into matrix, row-by-row.
   /// Note that rv.Dim() must either equal NumRows()*NumCols() or
@@ -298,9 +309,43 @@ class MatrixBase {
   /// please leave it as it (i.e. returning zero) because it affects the
   /// RectifiedLinearComponent in the neural net code.
   void ApplyHeaviside();
-  
-  void TestUninitialized() const; // This function is designed so that if any element
-  
+
+  /** Singular value decomposition
+     Major limitations:
+     For nonsquare matrices, we assume m>=n (NumRows >= NumCols), and we return
+     the "skinny" Svd, i.e. the matrix in the middle is diagonal, and the
+     one on the left is rectangular.
+     In Svd, *this = U*diag(S)*Vt.
+     Null pointers for U and/or Vt at input mean we do not want that output.  We
+     expect that S.Dim() == m, U is either NULL or m by n,
+     and v is either NULL or n by n.
+     The singular values are not sorted (use SortSvd for that).  */
+  void DestructiveSvd(VectorBase<Real> *s, MatrixBase<Real> *U,
+                      MatrixBase<Real> *Vt);  // Destroys calling matrix.
+
+  /// Compute SVD (*this) = U diag(s) Vt.   Note that the V in the call is already
+  /// transposed; the normal formulation is U diag(s) V^T.
+  /// Null pointers for U or V mean we don't want that output (this saves
+  /// compute).  The singular values are not sorted (use SortSvd for that).
+  void Svd(VectorBase<Real> *s, MatrixBase<Real> *U,
+           MatrixBase<Real> *Vt) const;
+  /// Compute SVD but only retain the singular values.
+  void Svd(VectorBase<Real> *s) const { Svd(s, NULL, NULL); }
+
+
+  /// Returns smallest singular value.
+  Real MinSingularValue() const {
+    Vector<Real> tmp(std::min(NumRows(), NumCols()));
+    Svd(&tmp);
+    return tmp.Min();
+  }
+
+  void TestUninitialized() const; // This function is designed so that if any element?
+
+  /// Returns condition number by computing Svd.  Works even if cols > rows.
+  /// Returns infinity if all singular values are zero.
+  Real Cond() const;
+
   /// Returns true if matrix is Symmetric.
   bool IsSymmetric(Real cutoff = 1.0e-05) const;  // replace magic number
 
@@ -479,6 +524,21 @@ class MatrixBase {
   /// write to stream.
   void Write(std::ostream & out, bool binary) const;
 
+  // Below is internal methods for Svd, user does not have to know about this.
+#if !defined(HAVE_ATLAS) && !defined(USE_KALDI_SVD)
+  // protected:
+  // Should be protected but used directly in testing routine.
+  // destroys *this!
+  void LapackGesvd(VectorBase<Real> *s, MatrixBase<Real> *U,
+                     MatrixBase<Real> *Vt);
+#else
+ protected:
+  // destroys *this!
+  bool JamaSvd(VectorBase<Real> *s, MatrixBase<Real> *U,
+               MatrixBase<Real> *V);
+
+#endif
+
  protected:
 
   ///  Initializer, callable only from child.
@@ -538,6 +598,89 @@ class Matrix : public MatrixBase<Real> {
   template<typename OtherReal>
   explicit Matrix(const CuMatrixBase<OtherReal> &cu,
                   MatrixTransposeType trans = kNoTrans);
+
+
+	/// Copy constructor taking SpMatrix...
+	/// It is symmetric, so no option for transpose, and NumRows == Cols
+	template<typename OtherReal>
+  explicit Matrix(const SpMatrix<OtherReal> & M) : MatrixBase<Real>() {
+    Resize(M.NumRows(), M.NumRows(), kUndefined);
+    this->CopyFromSp(M);
+  }
+
+	/// Copy constructor taking TpMatrix...
+  template <typename OtherReal>
+  explicit Matrix(const TpMatrix<OtherReal> & M,
+                  MatrixTransposeType trans = kNoTrans) : MatrixBase<Real>() {
+    if (trans == kNoTrans) {
+      Resize(M.NumRows(), M.NumCols(), kUndefined);
+      this->CopyFromTp(M);
+    } else {
+      Resize(M.NumCols(), M.NumRows(), kUndefined);
+      this->CopyFromTp(M, kTrans);
+    }
+  }
+
+	
+	/// this <-- beta*this + alpha*SpA*B.
+  // This and the routines below are really
+  // stubs that need to be made more efficient.
+  void AddSpMat(const Real alpha,
+                const SpMatrix<Real>& A,
+                const MatrixBase<Real>& B, MatrixTransposeType transB,
+                const Real beta) {
+    Matrix<Real> M(A);
+    return this->AddMatMat(alpha, M, kNoTrans, B, transB, beta);
+  }	
+
+	/// this <-- beta*this + alpha*A*B.
+  void AddTpMat(const Real alpha,
+                const TpMatrix<Real>& A, MatrixTransposeType transA,
+                const MatrixBase<Real>& B, MatrixTransposeType transB,
+                const Real beta) {
+    Matrix<Real> M(A);
+    return this->AddMatMat(alpha, M, transA, B, transB, beta);
+  }
+  /// this <-- beta*this + alpha*A*B.
+  void AddMatSp(const Real alpha,
+                const MatrixBase<Real>& A, MatrixTransposeType transA,
+                const SpMatrix<Real>& B,
+                const Real beta) {
+    Matrix<Real> M(B);
+    return this->AddMatMat(alpha, A, transA, M, kNoTrans, beta);
+  }
+  /// this <-- beta*this + alpha*A*B*C.
+  void AddSpMatSp(const Real alpha,
+                  const SpMatrix<Real> &A,
+                  const MatrixBase<Real>& B, MatrixTransposeType transB,
+                  const SpMatrix<Real>& C,
+                const Real beta) {
+    Matrix<Real> M(A), N(C);
+    return this->AddMatMatMat(alpha, M, kNoTrans, B, transB, N, kNoTrans, beta);
+  }
+  /// this <-- beta*this + alpha*A*B.
+  void AddMatTp(const Real alpha,
+                const MatrixBase<Real>& A, MatrixTransposeType transA,
+                const TpMatrix<Real>& B, MatrixTransposeType transB,
+                const Real beta) {
+    Matrix<Real> M(B);
+    return this->AddMatMat(alpha, A, transA, M, transB, beta);
+  }
+
+  /// this <-- beta*this + alpha*A*B.
+  void AddTpTp(const Real alpha,
+               const TpMatrix<Real>& A, MatrixTransposeType transA,
+               const TpMatrix<Real>& B, MatrixTransposeType transB,
+               const Real beta) {
+    Matrix<Real> M(A), N(B);
+    return this->AddMatMat(alpha, M, transA, N, transB, beta);
+  }
+
+  /// this <-- beta*this + alpha*A*B.
+  // This one is more efficient, not like the others above.
+  void AddSpSp(const Real alpha,
+               const SpMatrix<Real>& A, const SpMatrix<Real>& B,
+               const Real beta);
 
 
   /// Swaps the contents of *this and *other.  Shallow swap.
@@ -734,6 +877,17 @@ Real TraceMatMatMatMat(const MatrixBase<Real> &A, MatrixTransposeType transA,
 /// \addtogroup matrix_funcs_misc
 /// @{
 
+
+/// Function to ensure that SVD is sorted.  This function is made as generic as
+/// possible, to be applicable to other types of problems.  s->Dim() should be
+/// the same as U->NumCols(), and we sort s from greatest to least absolute
+/// value (if sort_on_absolute_value == true) or greatest to least value
+/// otherwise, moving the columns of U, if it exists, and the rows of Vt, if it
+/// exists, around in the same way.  Note: the "absolute value" part won't matter
+/// if this is an actual SVD, since singular values are non-negative.
+template<typename Real> void SortSvd(VectorBase<Real> *s, MatrixBase<Real> *U,
+                                     MatrixBase<Real>* Vt = NULL,
+                                     bool sort_on_absolute_value = true);
 
 /// The following function is used in Matrix::Power, and separately tested, so we
 /// declare it here mainly for the testing code to see.  It takes a complex value to

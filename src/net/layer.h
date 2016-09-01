@@ -50,8 +50,13 @@ class Layer {
      
     l_Trainable = 0x0100, 
     l_Affine_Transform,
+    l_Affine_Transform_Cond,
+    l_Affine_Transform_Precond,
+    l_Affine_Transform_Precond_Online,
+    l_Logistic_Affine,
     l_BiLstm,
     l_BiLstm_Parallel,
+    l_BiLstm_Parallel_Preconditioned,
     l_Lstm,
     l_Lstm_Parallel,
 
@@ -158,7 +163,7 @@ class Layer {
 };
 
 inline bool IsLstmType(std::string layer_type_string) {
-  if (layer_type_string == "<BiLstm>" || layer_type_string == "<Lstm>" || layer_type_string == "<BiLstmParallel>" || layer_type_string == "<LstmParallel>" ) {
+  if (layer_type_string == "<BiLstm>" || layer_type_string == "<Lstm>" || layer_type_string == "<BiLstmParallel>" || layer_type_string == "<LstmParallel>" || layer_type_string == "<BiLstmParallelPreconditioned>") {
     return true;
   }
   return false;

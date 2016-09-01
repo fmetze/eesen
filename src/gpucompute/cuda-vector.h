@@ -35,6 +35,12 @@ namespace eesen {
 
 template<typename Real> class CuMatrixBase;
 
+template<typename Real>
+Real VecVec(const CuVectorBase<Real> &v1, const CuVectorBase<Real> &v2);
+
+template<typename Real, typename OtherReal>
+Real VecVec(const CuVectorBase<Real> &v1, const CuVectorBase<OtherReal> &v2);
+
 /**
  * Vector for CUDA computing
  */
@@ -44,6 +50,8 @@ class CuVectorBase {
   friend class CuVectorBase<float>;
   friend class CuVectorBase<double>;
   friend class CuMatrixBase<Real>;
+  friend class CuSpMatrix<Real>;
+  friend class CuTpMatrix<Real>;
   friend class MatrixBase<Real>;
 
   template <typename OtherReal>
@@ -71,10 +79,25 @@ class CuVectorBase {
   template<typename OtherReal>
   void CopyFromVec(const VectorBase<OtherReal> &src);
 
+  /// Add the diagonal of a matrix times itself:
+  /// *this = diag(M M^T) +  beta * *this (if trans == kNoTrans), or
+  /// *this = diag(M^T M) +  beta * *this (if trans == kTrans).
+  void AddDiagMat2(Real alpha, const CuMatrixBase<Real> &M,
+                   MatrixTransposeType trans, Real beta);
 
   template<typename OtherReal>
   void CopyToVec(VectorBase<OtherReal> *dst) const;
-  
+
+  /// data_ = alpha * data_ + beta * v
+  void AverageArray(const Real alpha, const Real *v, const Real Beta);
+  void CopyToArray(Real *v) const;
+
+  /// Copy from CPU array
+  void CopyFromArray(const Real *v);
+
+  void CopyColFromMat(const CuMatrixBase<Real> &mat, MatrixIndexT col);
+  void InvertElements();
+
   void CopyRowsFromMat(const CuMatrixBase<Real> &M);
 
   void CopyRowsFromMat(const MatrixBase<Real> &M);
@@ -89,6 +112,8 @@ class CuVectorBase {
 
   template<typename OtherReal>
   void AddVec(Real alpha, const CuVectorBase<OtherReal> &vec, Real beta = 1.0);
+
+  bool ApproxEqual(const CuVectorBase<Real> &other, float tol = 0.01) const;
 
   /// Sum the rows of the matrix, add to vector
   void AddRowSumMat(Real alpha, const CuMatrixBase<Real> &mat, Real beta = 1.0);
@@ -137,6 +162,12 @@ class CuVectorBase {
                           static_cast<UnsignedMatrixIndexT>(dim_));
     return CuValue<Real>(data_ + i); // will be casted to Real.
   }
+
+  /// Extracts the diagonal of a packed matrix M; works for Sp or Tp.
+  void CopyDiagFromPacked(const CuPackedMatrix<Real> &M);
+
+  /// Extracts the diagonal of a matrix.
+  void CopyDiagFromMat(const CuMatrix<Real> &M);
 
   /// Returns the maximum value of any element, or -infinity for the empty vector.  
   Real Max() const;

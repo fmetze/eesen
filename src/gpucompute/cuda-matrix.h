@@ -37,6 +37,12 @@
 namespace eesen {
 
 template<typename Real>
+Real TraceMatMat(const CuMatrixBase<Real> &A, const CuMatrixBase<Real> &B,
+                 MatrixTransposeType trans = kNoTrans);
+
+
+
+template<typename Real>
 class CuMatrixBase {
  public:
   friend class CuMatrixBase<float>;
@@ -46,6 +52,9 @@ class CuMatrixBase {
   friend class VectorBase<Real>;
   friend class CuVectorBase<Real>;
   friend class CuSubMatrix<Real>;
+  friend class CuSpMatrix<Real>;
+  friend class CuTpMatrix<Real>;
+  friend class CuBlockMatrix<Real>;
   friend class CuRand<Real>;
   friend class CuSubVector<Real>;
   friend void cu::RegularizeL1<Real>(CuMatrixBase<Real> *weight,
@@ -60,6 +69,28 @@ class CuMatrixBase {
                                   const CuArray<int32> &copy_from_idx,
                                   CuMatrixBase<Real> *tgt);
 
+  friend Real TraceMatMat<Real>(const CuMatrixBase<Real> &A,
+                                const CuMatrixBase<Real> &B,
+                                MatrixTransposeType trans);
+
+	
+  // Adds "value" to the diagonal elements of the matrix.  The matrix
+  // *this does not have to be square.
+  void AddToDiag(Real value);
+
+/// *this = beta * *this + alpha * M M^T, for symmetric matrices.  It only
+/// updates the lower triangle of *this.  It will leave the matrix asymmetric;
+/// if you need it symmetric as a regular matrix, do CopyLowerToUpper().
+  void SymAddMat2(const Real alpha, const CuMatrixBase<Real> &M,
+                   MatrixTransposeType transA, Real beta);	
+
+  void CopyLowerToUpper();
+
+  /// Inversion for positive definite symmetric matrices.
+  /// Treats the input as symmetric but only reads the lower triangle.
+  /// The output is symmetric.
+  void SymInvertPosDef();
+
   /////////////////////////////////////////////////////
   ///  Dimensions
   ////////////////////////////////////////////////////
@@ -73,6 +104,12 @@ class CuMatrixBase {
     ::MatrixDim d = { num_rows_, num_cols_, stride_ }; 
     return d; 
   }
+
+
+  bool IsUnit(Real tol = 0.001) const;
+
+  /// True if ((*this)-other).FrobeniusNorm() <= tol * this->FrobeniusNorm()
+  bool ApproxEqual(const CuMatrixBase<Real> &other, float tol = 0.01) const;
 
   /////////////////////////////////////////////////////
   /// Various copy functions
@@ -92,6 +129,11 @@ class CuMatrixBase {
   void CopyToMat(MatrixBase<OtherReal> *dst,
                  MatrixTransposeType trans = kNoTrans) const;
 
+  void CopyFromSp(const CuSpMatrix<Real> &M);
+
+  template<typename OtherReal>
+  void CopyFromTp(const CuTpMatrix<OtherReal> &M,
+                  MatrixTransposeType trans = kNoTrans);
 
   /////////////////////////////////////////////////////
   ///////  Basic operations
@@ -108,6 +150,12 @@ class CuMatrixBase {
   void ApplyLog();
   /// Sum of the matrix
   Real Sum() const;
+
+  /// Return the trace. If check_square = true, will crash if matrix is not square.
+  Real Trace(bool check_square = true) const;
+
+  Real FrobeniusNorm() const { return sqrt(TraceMatMat(*this, *this, kTrans)); }
+
   /// If the elements < floor_val, set them to floor_val
   void ApplyFloor(Real floor_val);
   /// If the elements > ceiling_val, set them to ceiling_val
@@ -122,6 +170,18 @@ class CuMatrixBase {
   void SetRandUniform();
   /// Set to random values drawn from a uniform distribution [-range, range]
   void InitRandUniform(Real range);
+
+  /// data_ = alpha * data_ + beta * v
+  void AverageArray(const Real alpha, const Real *v, const Real beta);
+
+  void CopyToArray(Real *v) const;
+
+  /// Copy from CPU array
+  void CopyFromArray(const Real *v);
+
+  /// invert the matrix by elements.
+  void InvertElements();
+
 
   /////////////////////////////////////////////////////
   /////  Activation
@@ -145,6 +205,12 @@ class CuMatrixBase {
   /// tanh output.  *this = diff * (1 - value^2).
   void DiffTanh(const CuMatrixBase<Real> &value,
                 const CuMatrixBase<Real> &diff);
+
+  /// This function does sets *this to the Cholesky factor of *this (i.e.  the C
+  /// satisfying *this = C C^T), and sets "inv_cholesky" (if supplied) to its
+  /// inverse.  *this is treated as a symmetric matrix but only the lower triangle
+  /// is accessed.
+  void Cholesky(CuMatrixBase<Real> *inv_cholesky = NULL);
 
 
   /////////////////////////////////////////////////////
@@ -228,6 +294,29 @@ class CuMatrixBase {
                     const CuMatrixBase<Real>& B, MatrixTransposeType transB,
                     const Real beta);
 
+  /// *this = beta * *this + alpha * diag(v) * M [or M^T].
+  /// The same as adding M but scaling each row M_i by v(i).
+  void AddDiagVecMat(const Real alpha, CuVectorBase<Real> &v,
+                     const CuMatrixBase<Real> &M, MatrixTransposeType transM, 
+                     Real beta = 1.0);  
+
+ /// this <-- beta*this + alpha*SpA*B
+  void AddSpMat(const Real alpha,
+                const CuSpMatrix<Real> &A,
+                const CuMatrixBase<Real> &B, MatrixTransposeType transB,
+                const Real beta) {
+    CuMatrix<Real> M(A);
+    return AddMatMat(alpha, M, kNoTrans, B, transB, beta);
+  }
+
+  /// this <-- beta*this + alpha*A*B.
+  void AddTpMat(const Real alpha,
+                const CuTpMatrix<Real> &A, MatrixTransposeType transA,
+                const CuMatrixBase<Real> &B, MatrixTransposeType transB,
+                const Real beta) {
+    CuMatrix<Real> M(A);
+    return AddMatMat(alpha, M, transA, B, transB, beta);
+  }
 
   /////////////////////////////////////////////////////
   ///// SubMatrix and SubVector
@@ -265,6 +354,8 @@ class CuMatrixBase {
   ///// Specific Element
   /////////////////////////////////////////////////////
   inline CuValue<Real> operator() (MatrixIndexT r, MatrixIndexT c) {
+    KALDI_PARANOID_ASSERT(r > -1 && c > -1);
+
     KALDI_PARANOID_ASSERT(static_cast<UnsignedMatrixIndexT>(r) <
                           static_cast<UnsignedMatrixIndexT>(num_rows_) &&
                           static_cast<UnsignedMatrixIndexT>(c) <
@@ -273,6 +364,8 @@ class CuMatrixBase {
   }
   
   inline Real operator() (MatrixIndexT r, MatrixIndexT c) const {
+    KALDI_PARANOID_ASSERT(r > -1 && c > -1);
+
     KALDI_PARANOID_ASSERT(static_cast<UnsignedMatrixIndexT>(r) <
                           static_cast<UnsignedMatrixIndexT>(num_rows_) &&
                           static_cast<UnsignedMatrixIndexT>(c) <
@@ -350,6 +443,21 @@ class CuMatrix: public CuMatrixBase<Real> {
   explicit CuMatrix(const MatrixBase<OtherReal> &other,
                     MatrixTransposeType trans = kNoTrans);
 
+  /// Copy constructor taking SpMatrix...
+  explicit CuMatrix(const CuSpMatrix<Real> &M) : CuMatrixBase<Real>() {
+    Resize(M.NumRows(), M.NumRows(), kUndefined);
+    this->CopyFromSp(M);
+  }
+
+  /// Copy constructor taking TpMatrix...
+  template <typename OtherReal>
+  explicit CuMatrix(const CuTpMatrix<OtherReal> & M,
+                    MatrixTransposeType trans = kNoTrans) : CuMatrixBase<Real>() {
+    Resize(M.NumCols(), M.NumRows(), kUndefined);
+    this->CopyFromTp(M, trans);
+  }
+
+
   template<typename OtherReal>
   explicit CuMatrix(const CuMatrixBase<OtherReal> &M,
                     MatrixTransposeType trans = kNoTrans);
@@ -371,6 +479,8 @@ class CuMatrix: public CuMatrixBase<Real> {
     this->CopyFromMat(other);
     return *this;
   }
+
+  void Transpose();
 
   /// Allocate the memory
   void Resize(MatrixIndexT rows, MatrixIndexT cols,
