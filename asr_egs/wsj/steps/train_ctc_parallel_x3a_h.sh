@@ -161,7 +161,7 @@ if $subsample_feats; then
   labels_tr="ark:cat $tmpdir/labels.tr|"
   labels_cv="ark:cat $tmpdir/labels.cv|"
 
-  trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+  #trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
 
 elif $copy_feats; then
   # Save the features to a local dir on the GPU machine. On Linux, this usually points to /tmp
@@ -171,7 +171,7 @@ elif $copy_feats; then
   feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
   feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
 
-  trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+  #trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
 fi
 
 if $add_deltas; then
@@ -209,15 +209,16 @@ for iter in $(seq $start_epoch_num $max_iters); do
     # train
     echo -n "EPOCH $iter RUNNING ... "
     for JOB in `seq 1 $nj`; do
+	F=`echo $feats_tr|awk -v j=$JOB '{sub("JOB", j); print $0}'`
 	$train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
             --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose --block-softmax=$block_softmax \
-            --num-jobs=$nj --job-id=$JOB `echo $feats_tr|awk -v j=$JOB '{sub("JOB", j); print $0}'` \
-	    "$labels_tr" $tmpdir/avg/nnet.iter$[iter-1] $tmpdir/avg/nnet.iter${iter} \
+            --num-jobs=$nj --job-id=$JOB \
+	    "$F" "$labels_tr" $tmpdir/avg/nnet.iter$[iter-1] $tmpdir/avg/nnet.iter${iter} \
             >& $dir/log/tr.iter$iter.$JOB.log &
 	sleep 15
     done
-    cp $tmpdir/avg/nnet.iter$iter $dir/nnet
     wait
+    cp $tmpdir/avg/nnet.iter$iter $dir/nnet
     end_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
     echo -n "ENDS [$end_time]: "
     tracc=$(cat $dir/log/tr.iter${iter}.1.log | grep -a "TOTAL TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
@@ -225,11 +226,12 @@ for iter in $(seq $start_epoch_num $max_iters); do
 
     # validation
     for JOB in `seq 1 $nj`; do
+	F=`echo $feats_tr|awk -v j=$JOB '{sub("JOB", j); print $0}'`
 	$train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
             --cross-validate=true --block-softmax=$block_softmax \
             --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
-	    --num-jobs=$nj --job-id=$JOB `echo $feats_cv|awk -v j=$JOB '{sub("JOB", j); print $0}'` \
-            "$labels_cv" $tmpdir/avg/nnet.iter${iter} \
+	    --num-jobs=$nj --job-id=$JOB \
+            "$F" "$labels_cv" $tmpdir/avg/nnet.iter${iter} \
             >& $dir/log/cv.iter$iter.$JOB.log &
 	sleep 15
     done
