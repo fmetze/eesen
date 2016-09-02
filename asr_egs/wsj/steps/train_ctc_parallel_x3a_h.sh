@@ -14,7 +14,7 @@ train_tool=train-ctc-parallel  # the command for training; by default, we use th
 num_sequence=60          # during training, how many utterances to be processed in parallel
 valid_num_sequence=60    # number of parallel sequences in validation
 frame_num_limit=30000    # the number of frames to be processed at a time in training; this config acts to
-         # to prevent running out of GPU memory if #num_sequence very long sequences are processed;the max
+         # to prevent running out of GPU memory if #num_sequence very long sequences are processed; the max
          # number of training examples is decided by if num_sequence or frame_num_limit is reached first.
 
 # learning rate
@@ -201,7 +201,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
     pvacc=$cvacc
 
     # distribute and shuffle the data for this iteration
-    local/prep_scps.sh --nj $nj --cmd "run.pl" --seed $iter \
+    utils/prep_scps.sh --nj $nj --cmd "run.pl" --seed $iter \
 	$tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
         $dir/log/shuffle.iter$iter.log || exit 1;
     rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
