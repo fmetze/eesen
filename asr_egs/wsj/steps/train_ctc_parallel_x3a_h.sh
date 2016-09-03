@@ -209,7 +209,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
     # train
     echo -n "EPOCH $iter RUNNING ... "
     for JOB in `seq 1 $nj`; do
-	F=`echo $feats_tr|awk -v j=$JOB '{sub("JOB", j); print $0}'`
+	F=`echo $feats_tr|awk -v j=$JOB '{ sub("JOB", j); print $0 }'`
 	$train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
             --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose --block-softmax=$block_softmax \
             --num-jobs=$nj --job-id=$JOB \
@@ -221,12 +221,12 @@ for iter in $(seq $start_epoch_num $max_iters); do
     cp $tmpdir/avg/nnet.iter$iter $dir/nnet
     end_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
     echo -n "ENDS [$end_time]: "
-    tracc=$(cat $dir/log/tr.iter${iter}.1.log | grep -a "TOTAL TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
+    tracc=$(grep -a "TOTAL TOKEN_ACCURACY" $dir/log/tr.iter${iter}.1.log | tail -n 1 | awk '{ acc=$4; gsub("%","",acc); print acc }')
     echo -n "lrate $(printf "%.6g" $learn_rate), TRAIN ACCURACY $(printf "%.4f" $tracc)%, "
 
     # validation
     for JOB in `seq 1 $nj`; do
-	F=`echo $feats_tr|awk -v j=$JOB '{sub("JOB", j); print $0}'`
+	F=`echo $feats_cv|awk -v j=$JOB '{ sub("JOB", j); print $0 }'`
 	$train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
             --cross-validate=true --block-softmax=$block_softmax \
             --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
@@ -236,7 +236,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
 	sleep 15
     done
     wait
-    cvacc=$(cat $dir/log/cv.iter${iter}.1.log | grep -a "TOTAL TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
+    cvacc=$(grep -a "TOTAL TOKEN_ACCURACY" $dir/log/cv.iter${iter}.1.log | tail -n 1 | awk '{ acc=$4; gsub("%","",acc); print acc }')
     echo "VALID ACCURACY $(printf "%.4f" $cvacc)%"
 
     # stopping criterion
