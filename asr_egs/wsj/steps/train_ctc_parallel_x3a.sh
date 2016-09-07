@@ -230,7 +230,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
 
     # start annealing when improvement is low
     if [ 1 == $(bc <<< "$rel_impr < $start_halving_inc") ] && [ $iter -ge $halving_after_epoch ] && \
-       [ 1 == $(bc <<< "$abs_impr < $start_halving_inc") ]; then halving=true; fi
+       [ 1 == $(bc <<< "$old_impr < $start_halving_inc") ]; then halving=true; fi
     if [[ ( "$force_halving_epoch" =~ $intre ) && ( $iter -ge $force_halving_epoch ) ]]; then halving=true; fi
 
     # do annealing
