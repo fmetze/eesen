@@ -24,7 +24,7 @@ esac
 # extract full vocabulary
 cat $train_dir/text $dev_dir/text | awk '{for (i = 2; i <= NF; i++) print $i}' |\
   sed -e 's/ /\n/g' | sort -u | grep -v '\[LAUGHTER\]' | grep -v '\[NOISE\]' |\
-  grep -v '\[VOCALIZED-NOISE\]' > $dict_dir/vocab-full.txt  
+  grep -v '\[VOCALIZED-NOISE\]' > $dict_dir/vocab-full.txt
 
 # split into English and Chinese
 cat $dict_dir/vocab-full.txt | grep '[a-zA-Z]' > $dict_dir/vocab-en.txt
@@ -54,12 +54,13 @@ gawk 'NR==FNR{words[$1]; next;} ($1 in words)' \
 wc -l $dict_dir/vocab-en-oov.txt
 wc -l $dict_dir/lexicon-en-iv.txt
 
+# might need to adjust paths for lib64 and lib here ...
 pyver=`python --version 2>&1 | sed -e 's:^[A-Za-z ]*\([2-3]\.[0-9]\+\).*:\1:g'`
 export PYTHONPATH=$PYTHONPATH:`pwd`/tools/g2p/lib/python${pyver}/site-packages
 if [ ! -f tools/g2p/lib/python${pyver}/site-packages/g2p.py ]; then
   echo "--- Downloading Sequitur G2P ..."
   echo "NOTE: it assumes that you have Python, NumPy and SWIG installed on your system!"
-  wget -P tools http://www-i6.informatik.rwth-aachen.de/web/Software/g2p-r1668.tar.gz
+  wget -P tools -q http://www-i6.informatik.rwth-aachen.de/web/Software/g2p-r1668.tar.gz
   tar xf tools/g2p-r1668.tar.gz -C tools
   cd tools/g2p
   echo '#include <cstdio>' >> Utility.hh # won't compile on my system w/o this "patch"
@@ -74,7 +75,7 @@ fi
 
 if [ ! -f conf/g2p_model ]; then
   echo "--- Downloading a pre-trained Sequitur G2P model ..."
-  wget http://sourceforge.net/projects/kaldi/files/sequitur-model4 -O conf/g2p_model
+  wget -q http://sourceforge.net/projects/kaldi/files/sequitur-model4 -O conf/g2p_model
   if [ ! -f conf/g2p_model ]; then
     echo "Failed to download the g2p model!"
     exit 1
@@ -93,7 +94,7 @@ cat $dict_dir/lexicon-en-oov.txt $dict_dir/lexicon-en-iv.txt |\
 
 # produce pronunciations for chinese 
 if [ ! -f $dict_dir/cedict_1_0_ts_utf-8_mdbg.txt ]; then
-  wget -P $dict_dir http://www.mdbg.net/chindict/export/cedict/cedict_1_0_ts_utf-8_mdbg.txt.gz 
+  wget -P $dict_dir -q http://www.mdbg.net/chindict/export/cedict/cedict_1_0_ts_utf-8_mdbg.txt.gz 
   gunzip $dict_dir/cedict_1_0_ts_utf-8_mdbg.txt.gz
 fi
 
@@ -299,6 +300,4 @@ cat $dict_dir/nonsilence_phones.txt | perl -e 'while(<>){ foreach $p (split(" ",
 
 export LC_ALL=C
 
-
-
-exit 1;
+echo HKUST prepare dict succeeded

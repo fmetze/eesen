@@ -1,27 +1,33 @@
 #!/bin/bash
 
-
 . path.sh
 
-if [ $# != 2 ]; then
-   echo "Usage: hkust_data_prep.sh AUDIO_PATH TEXT_PATH"
+if [ $# != 2 ] && [ $# != 8 ]; then
+   echo "Usage: hkust_data_prep.sh [--audio-filter '| sox ...' --train-dir X --dev-dir Y] AUDIO_PATH TEXT_PATH"
    exit 1;
 fi
 
-HKUST_AUDIO_DIR=$1
-HKUST_TEXT_DIR=$2
+if [ $# == 2 ]; then
+    HKUST_AUDIO_DIR=$1
+    HKUST_TEXT_DIR=$2
+else
+    HKUST_AUDIO_DIR=$7
+    HKUST_TEXT_DIR=$8
+fi
 
-train_dir=data/local/train
-dev_dir=data/local/dev
+train_dir=data/train
+dev_dir=data/dev
+audio_filter=""
 
+. parse_options.sh
 
 case 0 in    #goto here
     1)
 ;;           #here:
 esac
 
-mkdir -p $train_dir
-mkdir -p $dev_dir
+mkdir -p $train_dir data/local/train
+mkdir -p $dev_dir   data/local/dev
 
 #data directory check
 if [ ! -d $HKUST_AUDIO_DIR ] || [ ! -d $HKUST_TEXT_DIR ]; then
@@ -30,16 +36,17 @@ if [ ! -d $HKUST_AUDIO_DIR ] || [ ! -d $HKUST_TEXT_DIR ]; then
 fi
 
 #find sph audio file for train dev resp.
-find $HKUST_AUDIO_DIR -iname "*.sph" | grep -i "audio/train" > $train_dir/sph.flist
-find $HKUST_AUDIO_DIR -iname "*.sph" | grep -i "audio/dev" > $dev_dir/sph.flist
+find $HKUST_AUDIO_DIR -iname "*.sph" | grep -i "audio/train" > data/local/train/sph.flist
+find $HKUST_AUDIO_DIR -iname "*.sph" | grep -i "audio/dev" > data/local/dev/sph.flist
 
-n=`cat $train_dir/sph.flist $dev_dir/sph.flist | wc -l`
+n=`cat data/local/train/sph.flist data/local/dev/sph.flist | wc -l`
 [ $n -ne 897 ] && \
   echo Warning: expected 897 data data files, found $n
 
 
 #Transcriptions preparation
 
+[ -f data/local/train/transcripts.txt ] || \
 #collect all trans, convert encodings to utf-8,
 find $HKUST_TEXT_DIR -iname "*.txt" | grep -i "trans/train" | xargs cat |\
   iconv -f GBK -t utf-8 - | perl -e '
@@ -54,8 +61,9 @@ find $HKUST_TEXT_DIR -iname "*.txt" | grep -i "trans/train" | xargs cat |\
         print "\n"; 
       }
     }
-  ' | sort -k1 > $train_dir/transcripts.txt 
+  ' | sort -k1 > data/local/train/transcripts.txt 
 
+[ -f data/local/dev/transcripts.txt ] || \
 find $HKUST_TEXT_DIR -iname "*.txt" | grep -i "trans/dev" | xargs cat |\
   iconv -f GBK -t utf-8 - | perl -e '
     while (<STDIN>) {
@@ -69,7 +77,7 @@ find $HKUST_TEXT_DIR -iname "*.txt" | grep -i "trans/dev" | xargs cat |\
         print "\n"; 
       }
     }
-  ' | sort -k1  > $dev_dir/transcripts.txt
+  ' | sort -k1  > data/local/dev/transcripts.txt
 
 
 
@@ -81,11 +89,11 @@ export PYTHONPATH=$PYTHONPATH:`pwd`/tools/mmseg-1.3.0/lib/python${pyver}/site-pa
 if [ ! -f tools/mmseg-1.3.0/lib/python${pyver}/site-packages/*/mmseg.py ]; then
   echo "--- Downloading mmseg-1.3.0 ..."
   echo "NOTE: it assumes that you have Python, Setuptools installed on your system!"
-  wget -P tools http://pypi.python.org/packages/source/m/mmseg/mmseg-1.3.0.tar.gz 
+  wget -P tools -q http://pypi.python.org/packages/source/m/mmseg/mmseg-1.3.0.tar.gz 
   tar xf tools/mmseg-1.3.0.tar.gz -C tools
   cd tools/mmseg-1.3.0
   mkdir -p lib/python${pyver}/site-packages
-  ln -s lib lib64
+  #ln -s lib lib64
   python setup.py build 
   python setup.py install --prefix=.
   cd ../..
@@ -95,27 +103,29 @@ if [ ! -f tools/mmseg-1.3.0/lib/python${pyver}/site-packages/*/mmseg.py ]; then
   fi
 fi
 
-cat $train_dir/transcripts.txt |\
+[ -f data/local/train/text ] || \
+cat data/local/train/transcripts.txt |\
   sed -e 's/<foreign language=\"[a-zA-Z]\+\">/ /g' |\
   sed -e 's/<\/foreign>/ /g' |\
   sed -e 's/<noise>\(.\+\)<\/noise>/\1/g' |\
   sed -e 's/((\([^)]\{0,\}\)))/\1/g' |\
   local/hkust_normalize.pl |\
   python local/hkust_segment.py |\
-  awk '{if (NF > 1) print $0;}' > $train_dir/text
+  awk '{if (NF > 1) print $0;}' > data/local/train/text
 
-cat $dev_dir/transcripts.txt |\
+[ -f data/local/dev/text ] || \
+cat data/local/dev/transcripts.txt |\
   sed -e 's/<foreign language=\"[a-zA-Z]\+\">/ /g' |\
   sed -e 's/<\/foreign>/ /g' |\
   sed -e 's/<noise>\(.\+\)<\/noise>/\1/g' |\
   sed -e 's/((\([^)]\{0,\}\)))/\1/g' |\
   local/hkust_normalize.pl |\
   python local/hkust_segment.py |\
-  awk '{if (NF > 1) print $0;}' > $dev_dir/text
+  awk '{if (NF > 1) print $0;}' > data/local/dev/text
 
 # some data is corrupted. Delete them
-cat $train_dir/text | grep -v 20040527_210939_A901153_B901154-A-035691-035691 | egrep -v "A:|B:" > tmp
-mv tmp $train_dir/text
+cat data/local/train/text | grep -v 20040527_210939_A901153_B901154-A-035691-035691 | egrep -v "A:|B:" > tmp
+mv tmp data/local/train/text
 
 #Make segment files from transcript
 #segments file format is: utt-id side-id start-time end-time, e.g.:
@@ -123,25 +133,25 @@ mv tmp $train_dir/text
 
 
 awk '{ segment=$1; split(segment,S,"-"); side=S[2]; audioname=S[1];startf=S[3];endf=S[4];
-   print segment " " audioname "-" side " " startf/100 " " endf/100}' <$train_dir/text > $train_dir/segments
-awk '{name = $0; gsub(".sph$","",name); gsub(".*/","",name); print(name " " $0)}' $train_dir/sph.flist > $train_dir/sph.scp
+   print segment " " audioname "-" side " " startf/100 " " endf/100}' < data/local/train/text > data/local/train/segments
+awk '{name = $0; gsub(".sph$","",name); gsub(".*/","",name); print(name " " $0)}' data/local/train/sph.flist > data/local/train/sph.scp
 
 awk '{ segment=$1; split(segment,S,"-"); side=S[2]; audioname=S[1];startf=S[3];endf=S[4];
-   print segment " " audioname "-" side " " startf/100 " " endf/100}' <$dev_dir/text > $dev_dir/segments
-awk '{name = $0; gsub(".sph$","",name); gsub(".*/","",name); print(name " " $0)}' $dev_dir/sph.flist > $dev_dir/sph.scp
+   print segment " " audioname "-" side " " startf/100 " " endf/100}' < data/local/dev/text > data/local/dev/segments
+awk '{name = $0; gsub(".sph$","",name); gsub(".*/","",name); print(name " " $0)}' data/local/dev/sph.flist > data/local/dev/sph.scp
 
 
 
 sph2pipe=$EESEN_ROOT/tools/sph2pipe_v2.5/sph2pipe
 [ ! -f $sph2pipe ] && echo "Could not find the sph2pipe program at $sph2pipe" && exit 1;
 
-cat $train_dir/sph.scp | awk -v sph2pipe=$sph2pipe '{printf("%s-A %s -f wav -p -c 1 %s |\n", $1, sph2pipe, $2); 
-    printf("%s-B %s -f wav -p -c 2 %s |\n", $1, sph2pipe, $2);}' | \
-   sort > $train_dir/wav.scp || exit 1;
+cat data/local/train/sph.scp | awk -v af="$audio_filter" -v sph2pipe="$sph2pipe" '{printf("%s-A %s -f wav -p -c 1 %s %s |\n", $1, sph2pipe, $2, af); 
+    printf("%s-B %s -f wav -p -c 2 %s %s |\n", $1, sph2pipe, $2, af);}' | \
+   sort > data/local/train/wav.scp || exit 1;
 
-cat $dev_dir/sph.scp | awk -v sph2pipe=$sph2pipe '{printf("%s-A %s -f wav -p -c 1 %s |\n", $1, sph2pipe, $2); 
-    printf("%s-B %s -f wav -p -c 2 %s |\n", $1, sph2pipe, $2);}' | \
-   sort > $dev_dir/wav.scp || exit 1;
+cat data/local/dev/sph.scp | awk -v af="$audio_filter" -v sph2pipe="$sph2pipe" '{printf("%s-A %s -f wav -p -c 1 %s %s |\n", $1, sph2pipe, $2, af); 
+    printf("%s-B %s -f wav -p -c 2 %s %s |\n", $1, sph2pipe, $2, af);}' | \
+   sort > data/local/dev/wav.scp || exit 1;
 #side A - channel 1, side B - channel 2
 
 # this file reco2file_and_channel maps recording-id (e.g. sw02001-A)
@@ -149,29 +159,27 @@ cat $dev_dir/sph.scp | awk -v sph2pipe=$sph2pipe '{printf("%s-A %s -f wav -p -c 
 # sw02001-A  sw02001 A
 # In this case it's trivial, but in other corpora the information might
 # be less obvious.  Later it will be needed for ctm scoring.
-cat $train_dir/wav.scp | awk '{print $1}' | \
+cat data/local/train/wav.scp | awk '{print $1}' | \
   perl -ane '$_ =~ m:^(\S+)-([AB])$: || die "bad label $_"; print "$1-$2 $1 $2\n"; ' \
-  > $train_dir/reco2file_and_channel || exit 1;
-cat $dev_dir/wav.scp | awk '{print $1}' | \
+  > data/local/train/reco2file_and_channel || exit 1;
+cat data/local/dev/wav.scp | awk '{print $1}' | \
   perl -ane '$_ =~ m:^(\S+)-([AB])$: || die "bad label $_"; print "$1-$2 $1 $2\n"; ' \
-  > $dev_dir/reco2file_and_channel || exit 1;
+  > data/local/dev/reco2file_and_channel || exit 1;
 
 
-cat $train_dir/segments | awk '{spk=substr($1,1,33); print $1 " " spk}' > $train_dir/utt2spk || exit 1;
-cat $train_dir/utt2spk | sort -k 2 | utils/utt2spk_to_spk2utt.pl > $train_dir/spk2utt || exit 1;
+cat data/local/train/segments | awk '{spk=substr($1,1,33); print $1 " " spk}' > data/local/train/utt2spk || exit 1;
+cat data/local/train/utt2spk | sort -k 2 | utils/utt2spk_to_spk2utt.pl > data/local/train/spk2utt || exit 1;
 
-cat $dev_dir/segments | awk '{spk=substr($1,1,33); print $1 " " spk}' > $dev_dir/utt2spk || exit 1;
-cat $dev_dir/utt2spk | sort -k 2 | utils/utt2spk_to_spk2utt.pl > $dev_dir/spk2utt || exit 1;
+cat data/local/dev/segments | awk '{spk=substr($1,1,33); print $1 " " spk}' > data/local/dev/utt2spk || exit 1;
+cat data/local/dev/utt2spk | sort -k 2 | utils/utt2spk_to_spk2utt.pl > data/local/dev/spk2utt || exit 1;
 
 mkdir -p data/train data/dev
 for f in spk2utt utt2spk wav.scp text segments reco2file_and_channel; do
-  cp data/local/train/$f data/train/$f || exit 1;
+  cp data/local/train/$f $train_dir/$f || exit 1;
 done
 
 for f in spk2utt utt2spk wav.scp text segments reco2file_and_channel; do
-  cp data/local/dev/$f data/dev/$f || exit 1;
+  cp data/local/dev/$f $dev_dir/$f || exit 1;
 done
 
 echo HKUST data preparation succeeded
-  
-exit 1;
