@@ -12,8 +12,8 @@ train_tool=train-ctc-parallel  # the command for training; by default, we use th
 
 # configs for multiple sequences
 num_sequence=20          # during training, how many utterances to be processed in parallel
-valid_num_sequence=60    # number of parallel sequences in validation
-frame_num_limit=30000    # the number of frames to be processed at a time in training; this config acts to
+valid_num_sequence=200   # number of parallel sequences in validation
+frame_num_limit=15000    # the number of frames to be processed at a time in training; this config acts to
          # to prevent running out of GPU memory if #num_sequence very long sequences are processed; the max
          # number of training examples is decided by if num_sequence or frame_num_limit is reached first.
 
@@ -121,8 +121,8 @@ echo $splice_feats > $dir/splice_feats
 echo $subsample_feats > $dir/subsample_feats
 
 if $sort_by_len; then
-  gzip -cd $dir/labels.tr.gz | join <(feat-to-len scp:$data_tr/feats.scp ark,t:- | paste -d " " - $data_tr/feats.scp) -|sort -gk 2 | \
-    awk '{out=""; for (i=5;i<=NF;i++) {out=out" "$i}; if (!(out in done) && $1 >= 3*NF) {done[out]=1; print $1 " " $3}}' > $dir/train.scp
+  gzip -cd $dir/labels.tr.gz | join <(feat-to-len scp:$data_tr/feats.scp ark,t:- | paste -d " " - $data_tr/feats.scp) - | sort -gk 2 | \
+    awk '{out=""; for (i=5;i<=NF;i++) {out=out" "$i}; if (!(out in done) && $2 >= 3*NF) {done[out]=1; print $3 " " $4}}' > $dir/train.scp
   feat-to-len scp:$data_cv/feats.scp ark,t:- | awk '{print $2}' | \
     paste -d " " $data_cv/feats.scp - | sort -k3 -n - | awk '{print $1 " " $2}' > $dir/cv.scp || exit 1;
 else

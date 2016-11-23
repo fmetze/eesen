@@ -29,15 +29,15 @@ swbd=/path/to/LDC97S62
 fisher_dirs="/path/to/LDC2004T19/fe_03_p1_tran/ /path/to/LDC2005T19/fe_03_p2_tran/" # Set to "" if you don't have the fisher corpus
 eval2000_dirs="/path/to/LDC2002S09/hub5e_00 /path/to/LDC2002T43"
 
-# Set paths to various datasets
-swbd="/oasis/projects/nsf/cmu131/fmetze/LDC97S62"
-fisher_dirs="/oasis/projects/nsf/cmu139/yajie/LDC/LDC2004T19/fe_03_p1_tran/ /oasis/projects/nsf/cmu131/fmetze/LDC2005T19/FE_03_P2_TRAN/" # Set to "" if you don't have the fisher corpus
-eval2000_dirs="/oasis/projects/nsf/cmu131/fmetze/LDC2002S09/hub5e_00 /oasis/projects/nsf/cmu139/yajie/LDC/LDC2002T43"
+# SDSC Comet
+#swbd="/oasis/projects/nsf/cmu131/fmetze/LDC97S62"
+#fisher_dirs="/oasis/projects/nsf/cmu139/yajie/LDC/LDC2004T19/fe_03_p1_tran/ /oasis/projects/nsf/cmu131/fmetze/LDC2005T19/FE_03_P2_TRAN/" # Set to "" if you don't have the fisher corpus
+#eval2000_dirs="/oasis/projects/nsf/cmu131/fmetze/LDC2002S09/hub5e_00 /oasis/projects/nsf/cmu139/yajie/LDC/LDC2002T43"
 
 # CMU Rocks
-swbd=/data/ASR4/babel/ymiao/CTS/LDC97S62
-fisher_dirs="/data/ASR5/babel/ymiao/Install/LDC/LDC2004T19/fe_03_p1_tran/ /data/ASR5/babel/ymiao/Install/LDC/LDC2005T19/fe_03_p2_tran/"
-eval2000_dirs="/data/ASR4/babel/ymiao/CTS/LDC2002S09/hub5e_00 /data/ASR4/babel/ymiao/CTS/LDC2002T43"
+#swbd=/data/ASR4/babel/ymiao/CTS/LDC97S62
+#fisher_dirs="/data/ASR5/babel/ymiao/Install/LDC/LDC2004T19/fe_03_p1_tran/ /data/ASR5/babel/ymiao/Install/LDC/LDC2005T19/fe_03_p2_tran/"
+#eval2000_dirs="/data/ASR4/babel/ymiao/CTS/LDC2002S09/hub5e_00 /data/ASR4/babel/ymiao/CTS/LDC2002T43"
 
 . parse_options.sh
 
@@ -47,6 +47,9 @@ if [ $stage -le 1 ]; then
   echo =====================================================================
   # Use the same data preparation script from Kaldi
   local/swbd1_data_prep.sh $swbd  || exit 1;
+  # for data augmentation
+  local/swbd1_data_prep.sh --audio-filter "| sox -t wav - -t wav - -V1 speed 0.9" \
+    --train-dir data/train_A1 $swbd || exit 1;
 
   # Construct the phoneme-based lexicon
   local/swbd1_prepare_phn_dict.sh || exit 1;
@@ -68,16 +71,19 @@ if [ $stage -le 2 ]; then
   echo =====================================================================
   echo "                    FBank Feature Generation                       "
   echo =====================================================================
-  fbankdir=fbank
+  # fbank for fbank_pitch
+  featdir=fbank_pitch
 
   # Generate the fbank features; by default 40-dimensional fbanks on each frame
-  steps/make_fbank.sh --cmd "$train_cmd" --nj 32 data/train exp/make_fbank/train $fbankdir || exit 1;
-  utils/fix_data_dir.sh data/train || exit;
-  steps/compute_cmvn_stats.sh data/train exp/make_fbank/train $fbankdir || exit 1;
+  for d in `(cd data; ls -d train train_A[0-9] train_A[0-9][0-9])`; do
+    steps/make_${featdir}.sh --cmd "$train_cmd" --nj 32 data/$d exp/make_fbank/$d $featdir || exit 1;
+    utils/fix_data_dir.sh data/$d || exit;
+    steps/compute_cmvn_stats.sh data/$d exp/make_fbank/$d $featdir || exit 1;
+  done
 
-  steps/make_fbank.sh --cmd "$train_cmd" --nj 10 data/eval2000 exp/make_fbank/eval2000 $fbankdir || exit 1;
+  steps/make_${featdir}.sh --cmd "$train_cmd" --nj 10 data/eval2000 exp/make_fbank/eval2000 $featdir || exit 1;
   utils/fix_data_dir.sh data/eval2000 || exit;
-  steps/compute_cmvn_stats.sh data/eval2000 exp/make_fbank/eval2000 $fbankdir || exit 1;
+  steps/compute_cmvn_stats.sh data/eval2000 exp/make_fbank/eval2000 $featdir || exit 1;
 
   # Use the first 4k sentences as dev set, around 5 hours
   utils/subset_data_dir.sh --first data/train 4000 data/train_dev

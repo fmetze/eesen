@@ -2,7 +2,7 @@
 
 . path.sh
 
-if [ $# != 2 ] && [ $# != 8 ]; then
+if [ $# != 2 -a $# != 8 ]; then
    echo "Usage: hkust_data_prep.sh [--audio-filter '| sox ...' --train-dir X --dev-dir Y] AUDIO_PATH TEXT_PATH"
    exit 1;
 fi
@@ -18,6 +18,7 @@ fi
 train_dir=data/train
 dev_dir=data/dev
 audio_filter=""
+audio_speed=1
 
 . parse_options.sh
 
@@ -28,6 +29,9 @@ esac
 
 mkdir -p $train_dir data/local/train
 mkdir -p $dev_dir   data/local/dev
+
+# this detects if we need to adjust the timings of the segments (todo: add more cases, and fix option parsing)
+[[ $audio_filter =~ speed && $audio_speed=1 ]] && audio_speed=`echo $audio_filter | awk '{print $NF}'`
 
 #data directory check
 if [ ! -d $HKUST_AUDIO_DIR ] || [ ! -d $HKUST_TEXT_DIR ]; then
@@ -132,8 +136,8 @@ mv tmp data/local/train/text
 #sw02001-A_000098-001156 sw02001-A 0.98 11.56
 
 
-awk '{ segment=$1; split(segment,S,"-"); side=S[2]; audioname=S[1];startf=S[3];endf=S[4];
-   print segment " " audioname "-" side " " startf/100 " " endf/100}' < data/local/train/text > data/local/train/segments
+awk -v as=$audio_speed '{ segment=$1; split(segment,S,"-"); side=S[2]; audioname=S[1];startf=S[3];endf=S[4];
+   print segment " " audioname "-" side " " startf/100/as " " endf/100/as}' < data/local/train/text > data/local/train/segments
 awk '{name = $0; gsub(".sph$","",name); gsub(".*/","",name); print(name " " $0)}' data/local/train/sph.flist > data/local/train/sph.scp
 
 awk '{ segment=$1; split(segment,S,"-"); side=S[2]; audioname=S[1];startf=S[3];endf=S[4];

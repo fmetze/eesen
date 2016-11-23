@@ -7,14 +7,17 @@ export LC_ALL=C
 
 if [[ `uname -n` =~ comet-* ]]; then
     # SDSC Comet cluster
-    export TMPDIR=/scratch/$USER/$SLURM_JOBID
+    module load python
+    module load gnu
+#    module load cuda
+    [ -z "$SLURM_JOB_ID" ] && export TMPDIR=/tmp || export TMPDIR=/scratch/$USER/$SLURM_JOB_ID
 
 elif [[ `uname -n` =~ bridges ]]; then
     # PSC Bridges cluster
     export TMPDIR=/local/$SLURM_JOBID
     #export TMPDIR=$LOCAL
     #export TMPDIR=.
-    
+
 elif [[ `uname -n` =~ compute-* ]]; then
     # CMU Rocks cluster
     module load python27

@@ -30,6 +30,7 @@
 # If you give the --spk-list option, it reads the speakers to keep from <speaker-list-file>"
 # (note, in this case there is no <num-utt> positional parameter; see usage message.)
 
+echo "$0 $@"  # Print the command line for logging
 
 shortest=false
 perspk=false

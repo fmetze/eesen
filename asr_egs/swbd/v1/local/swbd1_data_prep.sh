@@ -19,23 +19,45 @@
 
 . path.sh
 
-#check existing directories
-if [ $# != 1 -a $# != 2 ]; then
-  echo "Usage: swbd1_data_prep_edin.sh /path/to/SWBD [/path/to/SWBD_DOC]"
-  exit 1; 
-fi 
+echo "$0 $@"  # Print the command line for logging
 
-SWBD_DIR=$1
+#check existing directories
+if [ $# != 1 -a $# != 2 -a $# != 5 -a $# != 6 -a $# != 7 -a $# != 8 ]; then
+  echo "Usage: swbd1_data_prep.sh [--audio-filter '| sox ...' --audio-speed r --train-dir Y] /path/to/SWBD [/path/to/SWBD_DOC]"
+  exit 1;
+fi
+
+if [ $# -gt 6 ]; then
+    SWBD_DIR="$7"
+    DOC_DIR="$8"
+elif [ $# -gt 4 ]; then
+    SWBD_DIR="$5"
+    DOC_DIR="$6"
+elif [ $# -gt 2 ]; then
+    SWBD_DIR="$3"
+    DOC_DIR="$4"
+else
+    SWBD_DIR="$1"
+    DOC_DIR="$2"
+fi
+
+train_dir=data/train
+audio_filter=""
+audio_speed=1
+
+. parse_options.sh
 
 dir=data/local/train
 mkdir -p $dir
 
+# this detects if we need to adjust the timings of the segments (todo: add more cases)
+[[ $audio_filter =~ speed && $audio_speed=1 ]] && audio_speed=`echo $audio_filter | awk '{print $NF}'`
 
 # Audio data directory check
 if [ ! -d $SWBD_DIR ]; then
-  echo "Error: run.sh requires a directory argument"
-  exit 1; 
-fi  
+  echo "Error: swbd1_data_prep.sh requires a directory argument"
+  exit 1;
+fi
 
 sph2pipe=$EESEN_ROOT/tools/sph2pipe_v2.5/sph2pipe
 [ ! -x $sph2pipe ] \
@@ -67,7 +89,7 @@ find $SWBD_DIR -iname '*.sph' | sort > $dir/sph.flist
 
 n=`cat $dir/sph.flist | wc -l`
 [ $n -ne 2435 ] && \
-  echo Warning: expected 2435 data data files, found $n
+  echo Warning: expected 2435 data data files, found $n in $SWBD_DIR
 
 
 # (1a) Transcriptions preparation
@@ -110,19 +132,19 @@ local/swbd1_map_words.pl -f 2- $dir/transcripts2.txt > $dir/text  # final transc
 # (1c) Make segment files from transcript
 #segments file format is: utt-id side-id start-time end-time, e.g.:
 #sw02001-A_000098-001156 sw02001-A 0.98 11.56
-awk '{ 
+awk -v as=$audio_speed '{
        segment=$1;
        split(segment,S,"[_-]");
        side=S[2]; audioname=S[1]; startf=S[3]; endf=S[4];
-       print segment " " audioname "-" side " " startf/100 " " endf/100
+       print segment " " audioname "-" side " " startf/100/as " " endf/100/as
 }' < $dir/text > $dir/segments
 
 sed -e 's?.*/??' -e 's?.sph??' $dir/sph.flist | paste - $dir/sph.flist \
   > $dir/sph.scp
 
-awk -v sph2pipe=$sph2pipe '{
-  printf("%s-A %s -f wav -p -c 1 %s |\n", $1, sph2pipe, $2); 
-  printf("%s-B %s -f wav -p -c 2 %s |\n", $1, sph2pipe, $2);
+awk -v sph2pipe="$sph2pipe" -v af="$audio_filter" '{
+  printf("%s-A %s -f wav -p -c 1 %s %s |\n", $1, sph2pipe, $2, af);
+  printf("%s-B %s -f wav -p -c 2 %s %s |\n", $1, sph2pipe, $2, af);
 }' < $dir/sph.scp | sort > $dir/wav.scp || exit 1;
 #side A - channel 1, side B - channel 2
 
@@ -146,23 +168,25 @@ sort -k 2 $dir/utt2spk | utils/utt2spk_to_spk2utt.pl > $dir/spk2utt || exit 1;
 
 # Copy stuff into its final locations [this has been moved from the format_data
 # script]
-mkdir -p data/train
+mkdir -p ${train_dir}
 for f in spk2utt utt2spk wav.scp text segments reco2file_and_channel; do
-  cp data/local/train/$f data/train/$f || exit 1;
+  cp data/local/train/$f ${train_dir}/$f || exit 1;
 done
 
-if [ $# == 2 ]; then # fix speaker IDs
-  find $2 -name conv.tab > $dir/conv.tab
-  local/swbd1_fix_speakerid.pl `cat $dir/conv.tab` data/train
-  utils/utt2spk_to_spk2utt.pl data/train/utt2spk.new > data/train/spk2utt.new
+if [ $# == 2 -o $# == 6 ]; then # fix speaker IDs
+  find $DOC_DIR -name conv.tab > $dir/conv.tab
+  local/swbd1_fix_speakerid.pl `cat $dir/conv.tab` ${train_dir}
+  utils/utt2spk_to_spk2utt.pl ${train_dir}/utt2spk.new > ${train_dir}/spk2utt.new
   # patch files
   for f in spk2utt utt2spk text segments; do
-    cp data/train/$f data/train/$f.old || exit 1;
-    cp data/train/$f.new data/train/$f || exit 1;
+    cp ${train_dir}/$f ${train_dir}/$f.old || exit 1;
+    cp ${train_dir}/$f.new ${train_dir}/$f || exit 1;
   done
   rm $dir/conv.tab
+else
+  echo not fixing speaker ids
 fi 
 
 echo Switchboard-1 data preparation succeeded.
 
-utils/fix_data_dir.sh data/train
+utils/fix_data_dir.sh ${train_dir}
