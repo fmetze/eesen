@@ -48,7 +48,7 @@ utils/model_topo.py --lstm-layer-num ${lstm_layer_num} --lstm-cell-dim ${lstm_ce
     --input-feat-dim `feat-to-dim scp:'head -n 1 data/train_nodup/feats.scp|' ark,t:|awk -v c=$context '{print (1+2*c)*$2}'` \
     --target-num `awk 'END {print 1+$2}' data/lang_phn/units.txt` > $dir/nnet.proto
 utils/prep_ctc_trans.py data/lang_phn/lexicon_numbers.txt data/train_nodup/text "<UNK>" | gzip -c - > $dir/labels.tr.gz
-utils/prep_ctc_trans.py data/lang_phn/lexicon_numbers.txt data/train_nodup/text "<UNK>" | gzip -c - > $dir/labels.cv.gz
+utils/prep_ctc_trans.py data/lang_phn/lexicon_numbers.txt data/train_dev/text   "<UNK>" | gzip -c - > $dir/labels.cv.gz
 
 # Train the network with CTC. Refer to the script for details about the arguments
 a=0 && [ -f ${dir}/.epoch ] && a=`cat ${dir}/.epoch | awk '{print $0-1}'`
