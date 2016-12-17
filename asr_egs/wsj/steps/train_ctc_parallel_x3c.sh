@@ -11,9 +11,9 @@ train_tool=train-ctc-parallel  # the command for training; by default, we use th
                 # parallel version which processes multiple utterances at the same time
 
 # configs for multiple sequences
-num_sequence=20          # during training, how many utterances to be processed in parallel
+num_sequence=200         # during training, how many utterances to be processed in parallel
 valid_num_sequence=200   # number of parallel sequences in validation
-frame_num_limit=15000    # the number of frames to be processed at a time in training; this config acts to
+frame_num_limit=30000    # the number of frames to be processed at a time in training; this config acts to
          # to prevent running out of GPU memory if #num_sequence very long sequences are processed; the max
          # number of training examples is decided by if num_sequence or frame_num_limit is reached first.
 
@@ -201,7 +201,14 @@ if [ ! -f $dir/nnet/nnet.iter0 ]; then
     net-initialize --binary=true --seed=$seed $dir/nnet.proto $dir/nnet/nnet.iter0 >& $dir/log/initialize_model.log || exit 1;
 fi
 
-# main loop
+# Block softmax
+if $block_softmax; then
+    BS="--block-softmax=true"
+else
+    BS=""
+fi
+
+# Main loop
 cur_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
 echo "TRAINING STARTS [$cur_time]"
 echo "[NOTE] TOKEN_ACCURACY refers to token accuracy, i.e., (1.0 - token_error_rate)."
@@ -212,7 +219,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
     # train
     echo -n "EPOCH $iter RUNNING ... "
     $train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
-        --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose --block-softmax=$block_softmax \
+        --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose $BS \
         "$feats_tr" "$labels_tr" $dir/nnet/nnet.iter$[iter-1] $dir/nnet/nnet.iter${iter} \
         >& $dir/log/tr.iter$iter.log || exit 1;
 
@@ -224,7 +231,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
 
     # validation
     $train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
-        --cross-validate=true --block-softmax=$block_softmax \
+        --cross-validate=true $BS \
         --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
         "$feats_cv" "$labels_cv" $dir/nnet/nnet.iter${iter} \
         >& $dir/log/cv.iter$iter.log || exit 1;

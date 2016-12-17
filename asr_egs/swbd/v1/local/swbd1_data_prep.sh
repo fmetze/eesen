@@ -52,6 +52,7 @@ mkdir -p $dir
 
 # this detects if we need to adjust the timings of the segments (todo: add more cases)
 [[ $audio_filter =~ speed && $audio_speed=1 ]] && audio_speed=`echo $audio_filter | awk '{print $NF}'`
+[[ $audio_filter =~ tempo && $audio_speed=1 ]] && audio_speed=`echo $audio_filter | awk '{print $NF}'`
 
 # Audio data directory check
 if [ ! -d $SWBD_DIR ]; then
