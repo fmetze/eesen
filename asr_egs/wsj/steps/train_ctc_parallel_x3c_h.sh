@@ -13,7 +13,7 @@ train_tool=train-ctc-parallel  # the command for training; by default, we use th
 # configs for multiple sequences
 num_sequence=200         # during training, how many utterances to be processed in parallel
 valid_num_sequence=200   # number of parallel sequences in validation
-frame_num_limit=30000    # the number of frames to be processed at a time in training; this config acts to
+frame_num_limit=25000    # the number of frames to be processed at a time in training; this config acts to
          # to prevent running out of GPU memory if #num_sequence very long sequences are processed; the max
          # number of training examples is decided by if num_sequence or frame_num_limit is reached first.
 
@@ -21,6 +21,10 @@ frame_num_limit=30000    # the number of frames to be processed at a time in tra
 learn_rate=4e-5          # learning rate
 final_learn_rate=1e-6    # final learning rate
 momentum=0.9             # momentum
+
+# parallelization settings
+nj=4                     # number of jobs in parallel
+utts_per_avg=1000        # number of utterances per averaging step
 
 # learning rate schedule
 max_iters=25             # max number of iterations
@@ -34,21 +38,19 @@ halving_after_epoch=10   # halving becomes enabled after this many epochs
 force_halving_epoch=     # force halving after this epoch
 
 # logging
-report_step=1000         # during training, the step (number of utterances) of reporting objective and accuracy
+report_step=5000         # during training, the step (number of utterances) of reporting objective and accuracy
 verbose=1
 
 # feature configs
 sort_by_len=true         # whether to sort the utterances by their lengths
 seed=777                 # random seed
 block_softmax=false      # multi-lingual training
-shuffle=false            # shuffle feature order after first iteration
 
 splice_feats=false       # whether to splice neighboring frams
 subsample_feats=false    # whether to subsample features
 norm_vars=true           # whether to apply variance normalization when we do cmn
 add_deltas=true          # whether to add deltas
 copy_feats=true          # whether to copy features into a local dir (on the GPU machine)
-context=1                # how many frames to stack
 
 # status of learning rate schedule; useful when training is resumed from a break point
 cvacc=0
@@ -56,25 +58,6 @@ pvacc=0
 halving=false
 
 ## End configuration section
-
-shuffle_data() {
-    iter=$1
-    num_sequence=$2
-    frame_num_limit=$3
-    dir=$4
-    tmpdir=$5
-    #
-    mkdir -p $tmpdir/shuffle
-    [ -f $tmpdir/train_local.org ] || cp $tmpdir/train_local.scp $tmpdir/train_local.org
-    [ -f $tmpdir/cv_local.org    ] || cp $tmpdir/cv_local.scp    $tmpdir/cv_local.org
-    local/prep_scps.sh --nj 1 --cmd "run.pl" --seed $iter \
-        $tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
-        $dir/log/shuffle.iter$iter.log
-     mv $tmpdir/feats_tr.1.scp $tmpdir/train_local.scp && mv $tmpdir/feats_cv.1.scp $tmpdir/cv_local.scp
-     rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
-}
-
-## End function section
 
 echo "$0 $@"  # Print the command line for logging
 
@@ -135,8 +118,8 @@ feats_tr="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$data_tr/utt2
 feats_cv="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$data_cv/utt2spk scp:$data_cv/cmvn.scp scp:$dir/cv.scp ark:- |"
 
 if $splice_feats; then
-  feats_tr="$feats_tr splice-feats --left-context=$context --right-context=$context ark:- ark:- |"
-  feats_cv="$feats_cv splice-feats --left-context=$context --right-context=$context ark:- ark:- |"
+  feats_tr="$feats_tr splice-feats --left-context=1 --right-context=1 ark:- ark:- |"
+  feats_cv="$feats_cv splice-feats --left-context=1 --right-context=1 ark:- ark:- |"
 fi
 
 if $subsample_feats; then
@@ -159,8 +142,8 @@ if $subsample_feats; then
   sed 's/^/1x/' $tmpdir/cv1local.scp >> $tmpdir/cv_local.scp
   sed 's/^/2x/' $tmpdir/cv2local.scp >> $tmpdir/cv_local.scp
 
-  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/train_local.scp ark:- |"
-  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/cv_local.scp ark:- |"
+  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
+  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
 
   gzip -cd $dir/labels.tr.gz | sed 's/^/0x/'  > $tmpdir/labels.tr
   gzip -cd $dir/labels.cv.gz | sed 's/^/0x/'  > $tmpdir/labels.cv
@@ -179,8 +162,8 @@ elif $copy_feats; then
   tmpdir=$(mktemp -d)
   copy-feats "$feats_tr" ark,scp:$tmpdir/train.ark,$tmpdir/train_local.scp || exit 1;
   copy-feats "$feats_cv" ark,scp:$tmpdir/cv.ark,$tmpdir/cv_local.scp || exit 1;
-  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/train_local.scp ark:- |"
-  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/cv_local.scp ark:- |"
+  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
+  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
 
   trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
 fi
@@ -188,11 +171,6 @@ fi
 if $add_deltas; then
     feats_tr="$feats_tr add-deltas ark:- ark:- |"
     feats_cv="$feats_cv add-deltas ark:- ark:- |"
-fi
-
-# shuffle the data for non-initial epochs
-if $shuffle && [ $start_epoch_num -gt 1 ]; then
-    shuffle_data $start_epoch_num $num_sequence $frame_num_limit $dir $tmpdir
 fi
 ## End of feature setup
 
@@ -202,14 +180,13 @@ if [ ! -f $dir/nnet/nnet.iter0 ]; then
     net-initialize --binary=true --seed=$seed $dir/nnet.proto $dir/nnet/nnet.iter0 >& $dir/log/initialize_model.log || exit 1;
 fi
 
-# Block softmax
-if $block_softmax; then
-    BS="--block-softmax=true"
-else
-    BS=""
-fi
+# create another tmp directory for the averaging and shuffling operations
+mkdir -p $tmpdir/avg $tmpdir/shuffle
+cp $dir/nnet/nnet.iter$[start_epoch_num-1] $tmpdir/avg || exit 1;
+cp $tmpdir/train_local.scp $tmpdir/train_local.org
+cp $tmpdir/cv_local.scp    $tmpdir/cv_local.org
 
-# Main loop
+# main loop
 cur_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
 echo "TRAINING STARTS [$cur_time]"
 echo "[NOTE] TOKEN_ACCURACY refers to token accuracy, i.e., (1.0 - token_error_rate)."
@@ -218,27 +195,44 @@ for iter in $(seq $start_epoch_num $max_iters); do
     hvacc=$pvacc
     pvacc=$cvacc
 
+    # distribute and shuffle the data for this iteration
+    utils/prep_scps.sh --nj $nj --cmd "run.pl" --seed $iter \
+	$tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
+        $dir/log/shuffle.iter$iter.log || exit 1;
+    rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
+    
     # train
     echo -n "EPOCH $iter RUNNING ... "
-    $train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
-        --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose $BS \
-        "$feats_tr" "$labels_tr" $dir/nnet/nnet.iter$[iter-1] $dir/nnet/nnet.iter${iter} \
-        >& $dir/log/tr.iter$iter.log || exit 1;
-
+    for JOB in `seq 1 $nj`; do
+	F=`echo $feats_tr|awk -v j=$JOB '{ sub("JOB", j); print $0 }'`
+	$train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
+            --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose $block_softmax \
+            --num-jobs=$nj --job-id=$JOB \
+	    "$F" "$labels_tr" $tmpdir/avg/nnet.iter$[iter-1] $tmpdir/avg/nnet.iter${iter} \
+            >& $dir/log/tr.iter$iter.$JOB.log &
+	sleep 15
+    done
+    wait
+    cp $tmpdir/avg/nnet.iter$iter $dir/nnet
     end_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
     echo -n "ENDS [$end_time]: "
-
-    tracc=$(cat $dir/log/tr.iter${iter}.log | grep -a "TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
+    
+    tracc=$(grep -a "TOTAL TOKEN_ACCURACY" $dir/log/tr.iter${iter}.1.log | tail -n 1 | awk '{ acc=$4; gsub("%","",acc); print acc }')
     echo -n "lrate $(printf "%.6g" $learn_rate), TRAIN ACCURACY $(printf "%.4f" $tracc)%, "
 
     # validation
-    $train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
-        --cross-validate=true $BS \
-        --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
-        "$feats_cv" "$labels_cv" $dir/nnet/nnet.iter${iter} \
-        >& $dir/log/cv.iter$iter.log || exit 1;
-
-    cvacc=$(cat $dir/log/cv.iter${iter}.log | grep -a "TOKEN_ACCURACY" | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc; }')
+    for JOB in `seq 1 $nj`; do
+	F=`echo $feats_cv|awk -v j=$JOB '{ sub("JOB", j); print $0 }'`
+	$train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
+            --cross-validate=true $block_softmax \
+            --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
+	    --num-jobs=$nj --job-id=$JOB \
+            "$F" "$labels_cv" $tmpdir/avg/nnet.iter${iter} \
+            >& $dir/log/cv.iter$iter.$JOB.log &
+	sleep 15
+    done
+    wait
+    cvacc=$(grep -a "TOTAL TOKEN_ACCURACY" $dir/log/cv.iter${iter}.1.log | tail -n 1 | awk '{ acc=$4; gsub("%","",acc); print acc }')
     echo "VALID ACCURACY $(printf "%.4f" $cvacc)%"
 
     # stopping criterion
@@ -266,9 +260,6 @@ for iter in $(seq $start_epoch_num $max_iters); do
       learn_rate=$(awk "BEGIN {if ($learn_rate<$final_learn_rate) {print $final_learn_rate} else {print $learn_rate}}")
     fi
 
-    # re-shuffle the data for the next iteration
-    $shuffle && shuffle_data $iter $num_sequence $frame_num_limit $dir $tmpdir
-
     # save the status
     echo $[$iter+1] > $dir/.epoch    # +1 because we save the epoch to start from
     echo $cvacc > $dir/.cvacc
@@ -277,4 +268,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
     echo $learn_rate > $dir/.lrate
 done
 
-echo "Training finished. After $iter epochs, reached $(printf "%.1f" $cvacc)% accuracy."
+# Convert the model marker from "<BiLstmParallel>" to "<BiLstm>"
+format-to-nonparallel $dir/nnet/nnet.iter${iter} $dir/final.nnet >& $dir/log/model_to_nonparal.log || exit 1;
+
+#echo "Training finished. After $iter epochs, reached $(printf "%.1f" $cvacc)% accuracy."

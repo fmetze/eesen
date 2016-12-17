@@ -16,7 +16,7 @@
 #SBATCH --ntasks-per-node=6
 #SBATCH --output=log/slurm-%j.out
 #SBATCH --export=ALL
-#SBATCH --time="24:00:00"
+#SBATCH --time="48:00:00"
 
 uname -a
 date
@@ -39,43 +39,34 @@ proj_dim=320        # dimensionality of projection layer
 . ./utils/parse_options.sh
 
 # Set the experiment directory
-dir=exp/train_char_l${lstm_layer_num}_c${lstm_cell_dim}-${proj_dim}_n${num_seq}_f${frame_limit}_aux22
+dir=exp/train_phn_l${lstm_layer_num}_c${lstm_cell_dim}_n${num_seq}_f${frame_limit}_aux25
 mkdir -p $dir
 
 # Output the network topology
 utils/model_topo.py --lstm-layer-num ${lstm_layer_num} --lstm-cell-dim ${lstm_cell_dim} \
-    --projection-dim ${proj_dim} --fgate-bias-init 1.0 \
+    --fgate-bias-init 1.0 \
     --input-feat-dim `feat-to-dim scp:'head -n 1 data/train_nodup/feats.scp|' ark,t:|awk -v c=$context '{print (1+2*c)*$2}'` \
     --target-num `awk 'END {print 1+$2}' data/lang_phn/units.txt` > $dir/nnet.proto
 utils/prep_ctc_trans.py data/lang_phn/lexicon_numbers.txt data/train_nodup/text "<UNK>" | gzip -c - > $dir/labels.tr.gz
 utils/prep_ctc_trans.py data/lang_phn/lexicon_numbers.txt data/train_dev/text   "<UNK>" | gzip -c - > $dir/labels.cv.gz
 
-# Train the network with CTC. Refer to the script for details about the arguments
-a=0 && [ -f ${dir}/.epoch ] && a=`cat ${dir}/.epoch | awk '{print $0-1}'`
-mydir=`mktemp -d`
-trap "echo \"Removing features tmpdir $mydir @ $(hostname)\"; rm -r $mydir" EXIT
-for m in $(seq $a 32); do
-    if [ -d $mydir/X$m ]; then
-	steps/train_ctc_parallel_x3c.sh \
-	    --add-deltas false --num-sequence $num_seq --frame-num-limit $frame_limit \
-	    --splice-feats true --subsample-feats true --max-iters $m \
-	    $mydir/X$m data/train_dev $dir || exit 1;
-    fi
+traindata=data/train_nodup
+a=1 && [ -f ${dir}/.epoch ] && a=`cat ${dir}/.epoch`
+mytmp=`mktemp -d`
+trap "echo \"Removing features tmpdir $mytmp @ $(hostname)\"; rm -r $mytmp" EXIT
 
-    # split training portion of data ('indir') n-fold using speakers,
-    # and select accordingly from augmented copies (in target)
-    # there is some naming problem ... train_1_pitch train_pitch_1
-    source=data/train      ;# the data
-    indir=data/train_nodup ;# the directory from which to read the speaker list etc
-    n=5
-    for i in $(seq $n -1 2); do
-	utils/subset_data_dir_tr_cv.sh --cv-spk-percent `awk -v v=$i 'BEGIN {print int(100/v)}'` \
-	    --seed $m $indir ${mydir}/tmp$i ${mydir}/tmp
-	utils/subset_data_dir.sh --spk-list ${mydir}/tmp/spk2utt \
-	    ${source}_`awk -v i=$i 'BEGIN {print i-1}'` ${mydir}/com$i
-	indir=${mydir}/tmp$i
-    done;
-    utils/subset_data_dir.sh --spk-list ${mydir}/tmp2/spk2utt ${source} ${mydir}/com1
-    utils/combine_data.sh ${mydir}/X`awk -v m=$m 'BEGIN {print m+1}'` ${mydir}/com*
-    rm -rf ${mydir}/tmp* ${mydir}/com*
+# Train the network with CTC. Refer to the script for details about the arguments
+for m in $(seq $a 32); do
+    [ -d $traindata ] || utils/mix_data_dirs.sh $m data/train_nodup $traindata \
+        data/train data/train_A* >& $dir/log/mix.iter${m}.log
+
+    steps/train_ctc_parallel_x3c.sh \
+        --add-deltas false --num-sequence $num_seq --frame-num-limit $frame_limit \
+        --splice-feats true --subsample-feats true --max-iters $m \
+        $traindata data/train_dev $dir || exit 1;
+
+    # we want the augmented training data private to this process
+    traindata=${mytmp}/X$m
 done
+
+echo Ok.

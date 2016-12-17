@@ -30,9 +30,9 @@ fisher_dirs="/path/to/LDC2004T19/fe_03_p1_tran/ /path/to/LDC2005T19/fe_03_p2_tra
 eval2000_dirs="/path/to/LDC2002S09/hub5e_00 /path/to/LDC2002T43"
 
 # SDSC Comet
-#swbd="/oasis/projects/nsf/cmu131/fmetze/LDC97S62"
-#fisher_dirs="/oasis/projects/nsf/cmu139/yajie/LDC/LDC2004T19/fe_03_p1_tran/ /oasis/projects/nsf/cmu131/fmetze/LDC2005T19/FE_03_P2_TRAN/" # Set to "" if you don't have the fisher corpus
-#eval2000_dirs="/oasis/projects/nsf/cmu131/fmetze/LDC2002S09/hub5e_00 /oasis/projects/nsf/cmu139/yajie/LDC/LDC2002T43"
+swbd="/oasis/projects/nsf/cmu131/fmetze/LDC97S62"
+fisher_dirs="/oasis/projects/nsf/cmu139/yajie/LDC/LDC2004T19/fe_03_p1_tran/ /oasis/projects/nsf/cmu131/fmetze/LDC2005T19/FE_03_P2_TRAN/" # Set to "" if you don't have the fisher corpus
+eval2000_dirs="/oasis/projects/nsf/cmu131/fmetze/LDC2002S09/hub5e_00 /oasis/projects/nsf/cmu139/yajie/LDC/LDC2002T43"
 
 # CMU Rocks
 #swbd=/data/ASR4/babel/ymiao/CTS/LDC97S62
@@ -47,8 +47,8 @@ if [ $stage -le 1 ]; then
   echo =====================================================================
   # Use the same data preparation script from Kaldi
   local/swbd1_data_prep.sh $swbd  || exit 1;
-  # for data augmentation
-  local/swbd1_data_prep.sh --audio-filter "| sox -t wav - -t wav - -V1 speed 0.9" \
+  # for data augmentation (add multiple lines like these)
+  local/swbd1_data_prep.sh --audio-filter "| sox -t wav - -t wav - -V1 speed 0.95" \
     --train-dir data/train_A1 $swbd || exit 1;
 
   # Construct the phoneme-based lexicon
@@ -71,7 +71,7 @@ if [ $stage -le 2 ]; then
   echo =====================================================================
   echo "                    FBank Feature Generation                       "
   echo =====================================================================
-  # fbank for fbank_pitch
+  # fbank or fbank_pitch
   featdir=fbank_pitch
 
   # Generate the fbank features; by default 40-dimensional fbanks on each frame
