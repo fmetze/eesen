@@ -33,7 +33,7 @@ trap "rm -rf $mydir" EXIT
 
 i=${#sources[@]}
 for src in ${sources[@]}; do
-    echo ""
+    echo "*** now reading" $src "***"
     [ $i -eq 1 ] && break
     utils/subset_data_dir_tr_cv.sh --cv-spk-percent `awk -v v=$i 'BEGIN {print int(100/v)}'` \
         --seed $seed $indir ${mydir}/tmp$i ${mydir}/tmp
@@ -44,4 +44,9 @@ for src in ${sources[@]}; do
 done
 
 utils/subset_data_dir.sh --spk-list ${mydir}/tmp2/spk2utt $src ${mydir}/com1
-utils/combine_data.sh $targetdir ${mydir}/com*
+echo "*** now combining sub-sets ***"
+utils/combine_data.sh --skip-fix true ${mydir}/all ${mydir}/com*
+echo "*** now filtering for original utterances ***"
+utils/subset_data_dir.sh --utt-list $2/utt2spk ${mydir}/all $targetdir
+echo "*** result ***"
+wc $targetdir/*

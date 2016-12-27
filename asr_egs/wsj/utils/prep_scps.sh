@@ -13,6 +13,7 @@ clean_up=true
 seed=
 cmd=
 nj=1
+cp=true
 # End of configuration
 
 echo "$0 $@"  # Print the command line for logging
@@ -23,7 +24,7 @@ echo "$0 $@"  # Print the command line for logging
 
 if [ $# != 6 ]; then
   echo "Usage: $0 <feat-tr> <feat-cv> <num-sequence> <frame-num-limit> <tmp-dir> <dir>"
-  echo " e.g.: $0 --nj 4 --cmd run.pl data/train_nodup/feats.scp data/train_dev/feats.scp 60 25000 exp/train_char_l5_c320_n60_f25000"
+  echo " e.g.: $0 --nj 4 --cp false --seed 1 --cmd run.pl data/train_nodup/feats.scp data/train_dev/feats.scp 60 25000 exp/train_char_l5_c320_n60_f25000"
   exit 1
 fi
 
@@ -68,13 +69,21 @@ for part in tr cv; do
         }
       }' $feat $tmpdir/batch.$part.$n.list > $tmpdir/batch.$part.$n.scp
   done
+  if $cp; then
+    # let's create another copy of the data, probably not needed if we read it with something like
+    # feats_tr="ark,s,cs:copy-feats scp:$dir/feats_tr.1.scp ark:- |"
   if [ $nj -ne 1 ]; then
     $cmd JOB=1:$nj $dir/log/prepare_feats_$part.JOB.log \
       copy-feats scp:$tmpdir/batch.$part.JOB.scp ark,scp:$tmpdir/feats_$part.JOB.ark,$dir/feats_$part.JOB.scp
   else
     copy-feats scp:$tmpdir/batch.$part.1.scp ark,scp:$tmpdir/feats_$part.1.ark,$dir/feats_$part.1.scp
   fi
-
+  else
+    # we do not want to create another copy of the ark file
+    for n in $(seq $nj); do
+      cp $tmpdir/batch.$part.$n.scp $dir/feats_$part.1.scp
+    done
+  fi
 done
 
 }

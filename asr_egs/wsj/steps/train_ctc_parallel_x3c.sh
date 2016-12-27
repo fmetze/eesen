@@ -43,12 +43,13 @@ seed=777                 # random seed
 block_softmax=false      # multi-lingual training
 shuffle=false            # shuffle feature order after first iteration
 
+feats_std=1.0            # scale features
 splice_feats=false       # whether to splice neighboring frams
 subsample_feats=false    # whether to subsample features
 norm_vars=true           # whether to apply variance normalization when we do cmn
 add_deltas=true          # whether to add deltas
 copy_feats=true          # whether to copy features into a local dir (on the GPU machine)
-context=1                # how many frames to stack
+context_window=1         # how many frames to stack
 
 # status of learning rate schedule; useful when training is resumed from a break point
 cvacc=0
@@ -67,11 +68,12 @@ shuffle_data() {
     mkdir -p $tmpdir/shuffle
     [ -f $tmpdir/train_local.org ] || cp $tmpdir/train_local.scp $tmpdir/train_local.org
     [ -f $tmpdir/cv_local.org    ] || cp $tmpdir/cv_local.scp    $tmpdir/cv_local.org
-    local/prep_scps.sh --nj 1 --cmd "run.pl" --seed $iter \
+    utils/prep_scps.sh --cp false --nj 1 --cmd "run.pl" --seed $iter \
         $tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
-        $dir/log/shuffle.iter$iter.log
-     mv $tmpdir/feats_tr.1.scp $tmpdir/train_local.scp && mv $tmpdir/feats_cv.1.scp $tmpdir/cv_local.scp
-     rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
+        $dir/log/shuffle.iter$iter.log || exit 1;
+    mv $tmpdir/feats_tr.1.scp $tmpdir/train_local.scp
+    mv $tmpdir/feats_cv.1.scp $tmpdir/cv_local.scp
+    rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
 }
 
 ## End function section
@@ -120,10 +122,11 @@ echo $norm_vars > $dir/norm_vars
 echo $add_deltas > $dir/add_deltas
 echo $splice_feats > $dir/splice_feats
 echo $subsample_feats > $dir/subsample_feats
+echo $context_window > $dir/context_window
 
 if $sort_by_len; then
   gzip -cd $dir/labels.tr.gz | join <(feat-to-len scp:$data_tr/feats.scp ark,t:- | paste -d " " - $data_tr/feats.scp) - | sort -gk 2 | \
-    awk '{out=""; for (i=5;i<=NF;i++) {out=out" "$i}; if (!(out in done) && $2 >= 3*NF) {done[out]=1; print $3 " " $4}}' > $dir/train.scp
+    awk -v c=$context_window '{out=""; for (i=5;i<=NF;i++) {out=out" "$i}; if (!(out in done) && $2 > (2*c+1)*NF) {done[out]=1; print $3 " " $4}}' > $dir/train.scp
   feat-to-len scp:$data_cv/feats.scp ark,t:- | awk '{print $2}' | \
     paste -d " " $data_cv/feats.scp - | sort -k3 -n - | awk '{print $1 " " $2}' > $dir/cv.scp || exit 1;
 else
@@ -134,9 +137,17 @@ fi
 feats_tr="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$data_tr/utt2spk scp:$data_tr/cmvn.scp scp:$dir/train.scp ark:- |"
 feats_cv="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$data_cv/utt2spk scp:$data_cv/cmvn.scp scp:$dir/cv.scp ark:- |"
 
+if [ 1 == $(bc <<< "$feats_std != 1.0") ]; then
+    compute-cmvn-stats "$feats_tr" $dir/global_cmvn_stats
+    echo $feats_std > $dir/feats_std
+    feats_tr="$feats_tr apply-cmvn --norm-means=true --norm-vars=true $dir/global_cmvn_stats ark:- ark:- | copy-matrix --scale=$feats_std ark:- ark:- |"
+    feats_cv="$feats_cv apply-cmvn --norm-means=true --norm-vars=true $dir/global_cmvn_stats ark:- ark:- | copy-matrix --scale=$feats_std ark:- ark:- |"
+    # at present, copy-feats is a Kaldi program (not yet in Eesen)
+fi
+
 if $splice_feats; then
-  feats_tr="$feats_tr splice-feats --left-context=$context --right-context=$context ark:- ark:- |"
-  feats_cv="$feats_cv splice-feats --left-context=$context --right-context=$context ark:- ark:- |"
+  feats_tr="$feats_tr splice-feats --left-context=$context_window --right-context=$context_window ark:- ark:- |"
+  feats_cv="$feats_cv splice-feats --left-context=$context_window --right-context=$context_window ark:- ark:- |"
 fi
 
 if $subsample_feats; then
@@ -189,11 +200,6 @@ if $add_deltas; then
     feats_tr="$feats_tr add-deltas ark:- ark:- |"
     feats_cv="$feats_cv add-deltas ark:- ark:- |"
 fi
-
-# shuffle the data for non-initial epochs
-if $shuffle && [ $start_epoch_num -gt 1 ]; then
-    shuffle_data $start_epoch_num $num_sequence $frame_num_limit $dir $tmpdir
-fi
 ## End of feature setup
 
 # Initialize model parameters
@@ -201,22 +207,19 @@ if [ ! -f $dir/nnet/nnet.iter0 ]; then
     echo "Initializing model as $dir/nnet/nnet.iter0"
     net-initialize --binary=true --seed=$seed $dir/nnet.proto $dir/nnet/nnet.iter0 >& $dir/log/initialize_model.log || exit 1;
 fi
+if $block_softmax; then BS="--block-softmax=$block_softmax"; else BS=""; fi
 
-# Block softmax
-if $block_softmax; then
-    BS="--block-softmax=true"
-else
-    BS=""
-fi
-
-# Main loop
+# main loop
 cur_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
 echo "TRAINING STARTS [$cur_time]"
 echo "[NOTE] TOKEN_ACCURACY refers to token accuracy, i.e., (1.0 - token_error_rate)."
-$block_softmax || block_softmax=""
 for iter in $(seq $start_epoch_num $max_iters); do
     hvacc=$pvacc
     pvacc=$cvacc
+
+    # shuffle the data, if desired
+    if [ $shuffle ]; then shuffle_data $iter $num_sequence $frame_num_limit $dir $tmpdir \
+        >& $dir/log/shuffle.iter$iter.log; fi
 
     # train
     echo -n "EPOCH $iter RUNNING ... "
@@ -233,8 +236,7 @@ for iter in $(seq $start_epoch_num $max_iters); do
 
     # validation
     $train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
-        --cross-validate=true $BS \
-        --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose \
+       	--verbose=$verbose --cross-validate=true $BS \
         "$feats_cv" "$labels_cv" $dir/nnet/nnet.iter${iter} \
         >& $dir/log/cv.iter$iter.log || exit 1;
 
@@ -266,9 +268,6 @@ for iter in $(seq $start_epoch_num $max_iters); do
       learn_rate=$(awk "BEGIN {if ($learn_rate<$final_learn_rate) {print $final_learn_rate} else {print $learn_rate}}")
     fi
 
-    # re-shuffle the data for the next iteration
-    $shuffle && shuffle_data $iter $num_sequence $frame_num_limit $dir $tmpdir
-
     # save the status
     echo $[$iter+1] > $dir/.epoch    # +1 because we save the epoch to start from
     echo $cvacc > $dir/.cvacc
@@ -276,5 +275,3 @@ for iter in $(seq $start_epoch_num $max_iters); do
     echo $halving > $dir/.halving
     echo $learn_rate > $dir/.lrate
 done
-
-echo "Training finished. After $iter epochs, reached $(printf "%.1f" $cvacc)% accuracy."

@@ -12,11 +12,20 @@ if [[ `uname -n` =~ comet-* ]]; then
 #    module load cuda
     [ -z "$SLURM_JOB_ID" ] && export TMPDIR=/tmp || export TMPDIR=/scratch/$USER/$SLURM_JOB_ID
 
+elif [[ `uname -n` =~ ip-* ]]; then
+    # AWS instance
+    export EP=/home/ec2-user/eesen-precond
+    export PATH=$PWD/meine:$PWD/utils:$EP/tools/openfst/bin:$EP/src/featbin:$EP/src/decoderbin:$EP/src/fstbin:$EP/src/netbin:$PATH
+
+    export TMPDIR=/media/ephemeral0
+
 elif [[ `uname -n` =~ bridges ]]; then
     # PSC Bridges cluster
-    export TMPDIR=/local/$SLURM_JOBID
+    [ -n "$SLURM_JOBID" ] && export TMPDIR=/local/$SLURM_JOBID
+    #[ -d $TMPDIR ] || export TMPDIR=/pylon1/ir3l68p/metze
     #export TMPDIR=$LOCAL
     #export TMPDIR=.
+    export PATH=/pylon2/ir3l68p/metze/sox-14.4.2/src:${PATH}
 
 elif [[ `uname -n` =~ compute-* ]]; then
     # CMU Rocks cluster
