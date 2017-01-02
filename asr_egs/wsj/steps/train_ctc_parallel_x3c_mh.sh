@@ -38,13 +38,14 @@ halving_after_epoch=10   # halving becomes enabled after this many epochs
 force_halving_epoch=     # force halving after this epoch
 
 # logging
-report_step=5000         # during training, the step (number of utterances) of reporting objective and accuracy
+report_step=1000         # during training, the step (number of utterances) of reporting objective and accuracy
 verbose=1
 
 # feature configs
 sort_by_len=true         # whether to sort the utterances by their lengths
 seed=777                 # random seed
 block_softmax=false      # multi-lingual training
+shuffle=true             # shuffle feature order after first iteration
 
 feats_std=1.0            # scale features
 splice_feats=false       # whether to splice neighboring frams
@@ -53,6 +54,7 @@ norm_vars=true           # whether to apply variance normalization when we do cm
 add_deltas=true          # whether to add deltas
 copy_feats=true          # whether to copy features into a local dir (on the GPU machine)
 context_window=1         # how many frames to stack
+augment_dirs=data/train  # directories from which to read the augmented features
 
 # status of learning rate schedule; useful when training is resumed from a break point
 cvacc=0
@@ -61,22 +63,122 @@ halving=false
 
 ## End configuration section
 
-shuffle_data() {
-    nj=$1
-    iter=$2
-    num_sequence=$3
-    frame_num_limit=$4
-    dir=$5
-    tmpdir=$6
+function shuffle_data() {
+    local nj=$1
+    local iter=$2
+    local num_sequence=$3
+    local frame_num_limit=$4
+    local dir=$5
+    local tmpdir=$6
     #
     mkdir -p $tmpdir/shuffle
     [ -f $tmpdir/train_local.org ] || cp $tmpdir/train_local.scp $tmpdir/train_local.org
     [ -f $tmpdir/cv_local.org    ] || cp $tmpdir/cv_local.scp    $tmpdir/cv_local.org
     utils/prep_scps.sh --cp false --nj $nj --cmd "run.pl" --seed $iter \
-        $tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
-        $dir/log/shuffle.iter$iter.log || exit 1;
+        $tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir
 }
 
+function prepare_features() {
+    # this uses a lot of global variables
+    # in particular it sets feats_tr and feats_cv (amongst others)
+    local trfile=$1
+    local cvfile=$2
+    local m=$3
+    local targetdir=$4
+    local tmpdir=$5
+    local sources=( $@ ) && sources="${sources[@]:5}"
+
+    # do we do data augmentation?
+    if [ ! -d $targetdir ]; then
+	utils/mix_data_dirs.sh $m $data_tr $targetdir $sources >& $dir/log/mix.iter${m}.log || exit 1;
+	local data_tr=$targetdir
+    fi
+
+    if $sort_by_len; then
+	gzip -cd $dir/labels.tr.gz | join <(feat-to-len scp:$data_tr/feats.scp ark,t:- | paste -d " " - $data_tr/feats.scp) - | sort -gk 2 | \
+	    awk -v c=$context_window '{out=""; for (i=5;i<=NF;i++) {out=out" "$i}; if (!(out in done) && $2 > (2*c+1)*NF) {done[out]=1; print $3 " " $4}}' > $dir/train.scp
+	feat-to-len scp:$data_cv/feats.scp ark,t:- | awk '{print $2}' | \
+	    paste -d " " $data_cv/feats.scp - | sort -k3 -n - | awk '{print $1 " " $2}' > $dir/cv.scp || exit 1;
+    else
+	cat $data_tr/feats.scp | utils/shuffle_list.pl --srand ${seed:-777} > $dir/train.scp
+	cat $data_cv/feats.scp | utils/shuffle_list.pl --srand ${seed:-777} > $dir/cv.scp
+    fi
+
+    feats_tr="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$data_tr/utt2spk scp:$data_tr/cmvn.scp scp:$dir/train.scp ark:- |"
+    feats_cv="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$data_cv/utt2spk scp:$data_cv/cmvn.scp scp:$dir/cv.scp ark:- |"
+
+    if [ 1 == $(bc <<< "$feats_std != 1.0") ]; then
+	compute-cmvn-stats "$feats_tr" $dir/global_cmvn_stats
+	echo $feats_std > $dir/feats_std
+	feats_tr="$feats_tr apply-cmvn --norm-means=true --norm-vars=true $dir/global_cmvn_stats ark:- ark:- | copy-matrix --scale=$feats_std ark:- ark:- |"
+	feats_cv="$feats_cv apply-cmvn --norm-means=true --norm-vars=true $dir/global_cmvn_stats ark:- ark:- | copy-matrix --scale=$feats_std ark:- ark:- |"
+	# at present, copy-feats is a Kaldi program (not yet in Eesen)
+    fi
+
+    if $splice_feats; then
+	feats_tr="$feats_tr splice-feats --left-context=$context_window --right-context=$context_window ark:- ark:- |"
+	feats_cv="$feats_cv splice-feats --left-context=$context_window --right-context=$context_window ark:- ark:- |"
+    fi
+
+    mkdir -p $tmpdir
+    if $subsample_feats; then
+	#tmpdir=$(mktemp -d)
+    
+	copy-feats "$feats_tr" "ark:-" | tee \
+            >(subsample-feats --n=3 --offset=2 ark:- ark,scp:$tmpdir/train2.ark,$tmpdir/train2local.scp) \
+	    >(subsample-feats --n=3 --offset=1 ark:- ark,scp:$tmpdir/train1.ark,$tmpdir/train1local.scp) | \
+	      subsample-feats --n=3 --offset=0 ark:- ark,scp:$tmpdir/train0.ark,$tmpdir/train0local.scp || exit 1;
+
+	copy-feats "$feats_cv" "ark:-" | tee \
+	    >(subsample-feats --n=3 --offset=2 ark:- ark,scp:$tmpdir/cv2.ark,$tmpdir/cv2local.scp) \
+	    >(subsample-feats --n=3 --offset=1 ark:- ark,scp:$tmpdir/cv1.ark,$tmpdir/cv1local.scp) | \
+	      subsample-feats --n=3 --offset=0 ark:- ark,scp:$tmpdir/cv0.ark,$tmpdir/cv0local.scp || exit 1;
+
+	sed 's/^/0x/' $tmpdir/train0local.scp        > $tmpdir/train_local.scp
+	sed 's/^/1x/' $tmpdir/train1local.scp | tac >> $tmpdir/train_local.scp
+	sed 's/^/2x/' $tmpdir/train2local.scp       >> $tmpdir/train_local.scp
+	sed 's/^/0x/' $tmpdir/cv0local.scp  > $tmpdir/cv_local.scp
+	sed 's/^/1x/' $tmpdir/cv1local.scp >> $tmpdir/cv_local.scp
+	sed 's/^/2x/' $tmpdir/cv2local.scp >> $tmpdir/cv_local.scp
+    
+	feats_tr="ark,s,cs:copy-feats scp:$tmpdir/shuffle/batch.tr.JOB.scp ark:- |"
+	feats_cv="ark,s,cs:copy-feats scp:$tmpdir/shuffle/batch.cv.JOB.scp ark:- |"
+    
+	gzip -cd $dir/labels.tr.gz | sed 's/^/0x/'  > $tmpdir/labels.tr
+	gzip -cd $dir/labels.cv.gz | sed 's/^/0x/'  > $tmpdir/labels.cv
+	gzip -cd $dir/labels.tr.gz | sed 's/^/1x/' >> $tmpdir/labels.tr
+	gzip -cd $dir/labels.cv.gz | sed 's/^/1x/' >> $tmpdir/labels.cv
+	gzip -cd $dir/labels.tr.gz | sed 's/^/2x/' >> $tmpdir/labels.tr
+	gzip -cd $dir/labels.cv.gz | sed 's/^/2x/' >> $tmpdir/labels.cv
+	
+	#labels_tr="ark:cat $tmpdir/labels.tr|"
+	#labels_cv="ark:cat $tmpdir/labels.cv|"
+    
+	#trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+    
+    elif $copy_feats; then
+	# Save the features to a local dir on the GPU machine. On Linux, this usually points to /tmp
+	#tmpdir=$(mktemp -d)
+	copy-feats "$feats_tr" ark,scp:$tmpdir/train.ark,$tmpdir/train_local.scp || exit 1;
+	copy-feats "$feats_cv" ark,scp:$tmpdir/cv.ark,$tmpdir/cv_local.scp || exit 1;
+	feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
+	feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
+	
+	#trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+    fi
+
+    if $add_deltas; then
+	feats_tr="$feats_tr add-deltas ark:- ark:- |"
+	feats_cv="$feats_cv add-deltas ark:- ark:- |"
+    fi
+
+    # shuffle and partition the (current) data
+    shuffle_data $nj $m $num_sequence $frame_num_limit $dir $tmpdir
+
+    # let's return the value of feats_tr and feats_cv
+    echo "$feats_tr" > $trfile
+    echo "$feats_cv" > $cvfile
+}
 ## End function section
 
 echo "$0 $@"  # Print the command line for logging
@@ -112,120 +214,52 @@ done
 # derive prior probabilities of the labels.
 gunzip -c $dir/labels.tr.gz | awk '{line=$0; gsub(" "," 0 ",line); print line " 0";}' | \
   analyze-counts --verbose=1 --binary=false ark:- $dir/label.counts >& $dir/log/compute_label_counts.log || exit 1
-##
 
 ## Set up labels
 labels_tr="ark:gunzip -c $dir/labels.tr.gz|"
 labels_cv="ark:gunzip -c $dir/labels.cv.gz|"
 
-## Setup up features
+## Setup features
 # output feature configs which will be used in decoding
 echo $norm_vars > $dir/norm_vars
 echo $add_deltas > $dir/add_deltas
 echo $splice_feats > $dir/splice_feats
 echo $subsample_feats > $dir/subsample_feats
 echo $context_window > $dir/context_window
-
-if $sort_by_len; then
-  gzip -cd $dir/labels.tr.gz | join <(feat-to-len scp:$data_tr/feats.scp ark,t:- | paste -d " " - $data_tr/feats.scp) - | sort -gk 2 | \
-    awk -v c=$context_window '{out=""; for (i=5;i<=NF;i++) {out=out" "$i}; if (!(out in done) && $2 > (2*c+1)*NF) {done[out]=1; print $3 " " $4}}' > $dir/train.scp
-  feat-to-len scp:$data_cv/feats.scp ark,t:- | awk '{print $2}' | \
-    paste -d " " $data_cv/feats.scp - | sort -k3 -n - | awk '{print $1 " " $2}' > $dir/cv.scp || exit 1;
-else
-  cat $data_tr/feats.scp | utils/shuffle_list.pl --srand ${seed:-777} > $dir/train.scp
-  cat $data_cv/feats.scp | utils/shuffle_list.pl --srand ${seed:-777} > $dir/cv.scp
-fi
-
-feats_tr="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$data_tr/utt2spk scp:$data_tr/cmvn.scp scp:$dir/train.scp ark:- |"
-feats_cv="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$data_cv/utt2spk scp:$data_cv/cmvn.scp scp:$dir/cv.scp ark:- |"
-
-if [ 1 == $(bc <<< "$feats_std != 1.0") ]; then
-    compute-cmvn-stats "$feats_tr" $dir/global_cmvn_stats
-    echo $feats_std > $dir/feats_std
-    feats_tr="$feats_tr apply-cmvn --norm-means=true --norm-vars=true $dir/global_cmvn_stats ark:- ark:- | copy-matrix --scale=$feats_std ark:- ark:- |"
-    feats_cv="$feats_cv apply-cmvn --norm-means=true --norm-vars=true $dir/global_cmvn_stats ark:- ark:- | copy-matrix --scale=$feats_std ark:- ark:- |"
-    # at present, copy-feats is a Kaldi program (not yet in Eesen)
-fi
-
-if $splice_feats; then
-  feats_tr="$feats_tr splice-feats --left-context=$context_window --right-context=$context_window ark:- ark:- |"
-  feats_cv="$feats_cv splice-feats --left-context=$context_window --right-context=$context_window ark:- ark:- |"
-fi
-
-if $subsample_feats; then
-  tmpdir=$(mktemp -d)
-
-  copy-feats "$feats_tr" "ark:-" | tee \
-    >(subsample-feats --n=3 --offset=2 ark:- ark,scp:$tmpdir/train2.ark,$tmpdir/train2local.scp) \
-    >(subsample-feats --n=3 --offset=1 ark:- ark,scp:$tmpdir/train1.ark,$tmpdir/train1local.scp) | \
-      subsample-feats --n=3 --offset=0 ark:- ark,scp:$tmpdir/train0.ark,$tmpdir/train0local.scp || exit 1;
-
-  copy-feats "$feats_cv" "ark:-" | tee \
-    >(subsample-feats --n=3 --offset=2 ark:- ark,scp:$tmpdir/cv2.ark,$tmpdir/cv2local.scp) \
-    >(subsample-feats --n=3 --offset=1 ark:- ark,scp:$tmpdir/cv1.ark,$tmpdir/cv1local.scp) | \
-      subsample-feats --n=3 --offset=0 ark:- ark,scp:$tmpdir/cv0.ark,$tmpdir/cv0local.scp || exit 1;
-
-  sed 's/^/0x/' $tmpdir/train0local.scp        > $tmpdir/train_local.scp
-  sed 's/^/1x/' $tmpdir/train1local.scp | tac >> $tmpdir/train_local.scp
-  sed 's/^/2x/' $tmpdir/train2local.scp       >> $tmpdir/train_local.scp
-  sed 's/^/0x/' $tmpdir/cv0local.scp  > $tmpdir/cv_local.scp
-  sed 's/^/1x/' $tmpdir/cv1local.scp >> $tmpdir/cv_local.scp
-  sed 's/^/2x/' $tmpdir/cv2local.scp >> $tmpdir/cv_local.scp
-
-  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/shuffle/batch.tr.JOB.scp ark:- |"
-  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/shuffle/batch.cv.JOB.scp ark:- |"
-
-  gzip -cd $dir/labels.tr.gz | sed 's/^/0x/'  > $tmpdir/labels.tr
-  gzip -cd $dir/labels.cv.gz | sed 's/^/0x/'  > $tmpdir/labels.cv
-  gzip -cd $dir/labels.tr.gz | sed 's/^/1x/' >> $tmpdir/labels.tr
-  gzip -cd $dir/labels.cv.gz | sed 's/^/1x/' >> $tmpdir/labels.cv
-  gzip -cd $dir/labels.tr.gz | sed 's/^/2x/' >> $tmpdir/labels.tr
-  gzip -cd $dir/labels.cv.gz | sed 's/^/2x/' >> $tmpdir/labels.cv
-
-  labels_tr="ark:cat $tmpdir/labels.tr|"
-  labels_cv="ark:cat $tmpdir/labels.cv|"
-
-  trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
-
-elif $copy_feats; then
-  # Save the features to a local dir on the GPU machine. On Linux, this usually points to /tmp
-  tmpdir=$(mktemp -d)
-  copy-feats "$feats_tr" ark,scp:$tmpdir/train.ark,$tmpdir/train_local.scp || exit 1;
-  copy-feats "$feats_cv" ark,scp:$tmpdir/cv.ark,$tmpdir/cv_local.scp || exit 1;
-  feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
-  feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
-
-  trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
-fi
-
-if $add_deltas; then
-    feats_tr="$feats_tr add-deltas ark:- ark:- |"
-    feats_cv="$feats_cv add-deltas ark:- ark:- |"
-fi
+#
+tmpdir=`mktemp -d`
+trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+prepare_features $tmpdir/.tr $tmpdir/.cv 1 $tmpdir $tmpdir/T${start_epoch_num} $data_tr || exit 1;
+feats_tr=`cat $tmpdir/.tr 2>/dev/null`
+feats_cv=`cat $tmpdir/.cv 2>/dev/null`
 ## End of feature setup
 
-# Initialize model parameters
+## initialize model parameters
 if [ ! -f $dir/nnet/nnet.iter0 ]; then
     echo "Initializing model as $dir/nnet/nnet.iter0"
     net-initialize --binary=true --seed=$seed $dir/nnet.proto $dir/nnet/nnet.iter0 >& $dir/log/initialize_model.log || exit 1;
 fi
 if $block_softmax; then BS="--block-softmax=$block_softmax"; else BS=""; fi
 
-# create another tmp directory for the averaging operations
+## create another tmp directory for the averaging operations
 mkdir -p $tmpdir/avg
 cp $dir/nnet/nnet.iter$[start_epoch_num-1] $tmpdir/avg || exit 1;
 
-# main loop
+## main loop
 cur_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
 echo "TRAINING STARTS [$cur_time]"
-echo "[NOTE] TOKEN_ACCURACY refers to token accuracy, i.e., (1.0 - token_error_rate)."
 for iter in $(seq $start_epoch_num $max_iters); do
     hvacc=$pvacc
     pvacc=$cvacc
 
-    # shuffle and partition the data
-    shuffle_data $nj $iter $num_sequence $frame_num_limit $dir $tmpdir \
-        >& $dir/log/shuffle.iter$iter.log
+    # prepare the features for the next iteration in the background
+    prepare_features $tmpdir/.tr $tmpdir/.cv $[iter+1] $tmpdir/X$[iter+1] $tmpdir/T$[iter+1] $augment_dirs \
+        >& $dir/log/feats.iter$[iter+1].log &
+    if $subsample_feats; then
+	# assume this is where the labels will go ...
+	labels_tr="ark:cat $tmpdir/T${iter}/labels.tr|"
+	labels_cv="ark:cat $tmpdir/T${iter}/labels.cv|"
+    fi
 
     # train
     echo -n "EPOCH $iter RUNNING ... "
@@ -285,6 +319,11 @@ for iter in $(seq $start_epoch_num $max_iters); do
       learn_rate=$(awk "BEGIN {print($learn_rate*$halving_factor)}")
       learn_rate=$(awk "BEGIN {if ($learn_rate<$final_learn_rate) {print $final_learn_rate} else {print $learn_rate}}")
     fi
+
+    # put pre-computed features in place, remove old ones
+    feats_tr=`cat $tmpdir/.tr 2>/dev/null`
+    feats_cv=`cat $tmpdir/.cv 2>/dev/null`
+    rm -rf $tmpdir/T$iter
 
     # save the status
     echo $[$iter+1] > $dir/.epoch    # +1 because we save the epoch to start from

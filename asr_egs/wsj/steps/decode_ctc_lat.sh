@@ -17,7 +17,10 @@ max_active=7000 # max-active
 beam=15.0       # beam used
 lattice_beam=8.0
 max_mem=50000000 # approx. limit to memory consumption during minimization in bytes
-mdl=""
+mdl=final.nnet
+blank_scale=
+label_counts=
+block_softmax=
 
 skip_scoring=false # whether to skip WER scoring
 scoring_opts="--min-acwt 5 --max-acwt 15 --acwt-factor 0.1"
@@ -56,8 +59,10 @@ dir=`echo $3 | sed 's:/$::g'` # remove any trailing slash.
 srcdir=`dirname $dir`; # assume model directory one level up from decoding directory.
 sdata=$data/split$nj;
 
-thread_string=
-[ $num_threads -gt 1 ] && thread_string="-parallel --num-threads=$num_threads"
+[ $num_threads -gt 1 ] && thread_string="-parallel --num-threads=$num_threads" || thread_string=
+[ -z "$label_counts" ] && label_counts=${srcdir}/label.counts
+[ -z "$block_softmax" ] && bs="" || bs="--blockid=${block_softmax}"
+[ -z "$blank_scale" ] && ls="" || ls="--blank_scale=${blank_scale}"
 
 [ -z "$add_deltas" ] && add_deltas=`cat $srcdir/add_deltas 2>/dev/null`
 [ -z "$norm_vars" ] && norm_vars=`cat $srcdir/norm_vars 2>/dev/null`
@@ -82,7 +87,6 @@ elif [ -z "$mdl" ]; then
     mdl=$dir/final.nnet
 fi
 
-
 ## Set up the features
 echo "$0: feature: norm_vars(${norm_vars}) add_deltas(${add_deltas}) subsample_feats(${subsample_feats}) splice_feats(${splice_feats})"
 feats="ark,s,cs:apply-cmvn --norm-vars=$norm_vars --utt2spk=ark:$sdata/JOB/utt2spk scp:$sdata/JOB/cmvn.scp scp:$sdata/JOB/feats.scp ark:- |"
@@ -94,7 +98,7 @@ $subsample_feats && feats="$feats subsample-feats --n=$subsample_frames --offset
 # Decode for each of the acoustic scales
 # Hack this with, e.g.: copy-feats ark:- ark,t:- \| awk \'{if \(NF\>2\) {\$5=0\; \$6=0\; print \$0} else {print \$0}}\' \| tee A.JOB \| copy-feats ark,t:- ark:-
 $cmd JOB=1:$nj $dir/log/decode.JOB.log \
-  net-output-extract --class-frame-counts=$srcdir/label.counts --apply-log=true $mdl "$feats" ark:- \| \
+  net-output-extract --class-frame-counts=$label_counts --apply-log=true $bs $ls $mdl "$feats" ark:- \| \
   latgen-faster --max-active=$max_active --max-mem=$max_mem --beam=$beam --lattice-beam=$lattice_beam \
   --acoustic-scale=$acwt --allow-partial=true --word-symbol-table=$graphdir/words.txt \
   $graphdir/TLG.fst ark:- "ark:|gzip -c > $dir/lat.JOB.gz" || exit 1;

@@ -171,10 +171,11 @@ sort -k 2 $dir/utt2spk | utils/utt2spk_to_spk2utt.pl > $dir/spk2utt || exit 1;
 # script]
 mkdir -p ${train_dir}
 for f in spk2utt utt2spk wav.scp text segments reco2file_and_channel; do
-  cp data/local/train/$f ${train_dir}/$f || exit 1;
+  cp $dir/$f ${train_dir}/$f || exit 1;
 done
 
 if [ $# == 2 -o $# == 6 ]; then # fix speaker IDs
+  echo Now fixing speaker IDs in $train_dir
   find $DOC_DIR -name conv.tab > $dir/conv.tab
   local/swbd1_fix_speakerid.pl `cat $dir/conv.tab` ${train_dir}
   utils/utt2spk_to_spk2utt.pl ${train_dir}/utt2spk.new > ${train_dir}/spk2utt.new
@@ -185,7 +186,7 @@ if [ $# == 2 -o $# == 6 ]; then # fix speaker IDs
   done
   rm $dir/conv.tab
 else
-  echo not fixing speaker ids
+  echo Not fixing speaker IDs
 fi 
 
 echo Switchboard-1 data preparation succeeded.
