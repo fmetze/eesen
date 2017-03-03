@@ -49,6 +49,9 @@ int main(int argc, char *argv[]) {
     int blockid = -1;
     po.Register("blockid", &blockid, "Which block are you decoding? Ignore if you don't use block softmax");
 
+    float temp = 1.0;
+    po.Register("temperature", &temp, "Temperature of the output distribution");
+
     std::string use_gpu="no";
     po.Register("use-gpu", &use_gpu, "yes|no|optional, only has effect if compiled with CUDA"); 
 
@@ -86,6 +89,9 @@ int main(int argc, char *argv[]) {
     // outputs for ASR decoding
     ClassPrior class_prior(prior_opts);
 
+    // Set the temperature
+    net.SetTemp(temp);
+
     eesen::int64 tot_t = 0;   // Keep track of how many frames/data points have been processed
 
     SequentialBaseFloatMatrixReader feature_reader(feature_rspecifier);
@@ -112,7 +118,7 @@ int main(int argc, char *argv[]) {
       
       // Feed the sequence to the network for a feedforward pass
       net.Feedforward(CuMatrix<BaseFloat>(mat), &net_out);
-
+      
       // Convert posteriors to log-scale, if needed
       if (apply_log) {
         net_out.ApplyLog();

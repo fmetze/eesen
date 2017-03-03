@@ -673,6 +673,21 @@ void CuMatrixBase<Real>::ApplySoftMaxPerRow(const CuMatrixBase<Real> &src) {
   }
 }
 
+template<typename Real> // Y->this, X->src
+void CuMatrixBase<Real>::ApplySoftMaxPerRowTemp(const CuMatrixBase<Real> &src, const Real T) {
+  KALDI_ASSERT(SameDim(*this, src));
+  // not implemented for CUDA
+  {
+    MatrixBase<Real> &mat(this->Mat());
+    mat.CopyFromMat(src.Mat());
+    KALDI_ASSERT(T>0.0);
+    for(MatrixIndexT r = 0; r < mat.NumRows(); r++) {
+      mat.Row(r).Scale(1.0/T);
+      mat.Row(r).ApplySoftMax();
+    }
+  }
+}
+
 template<typename Real>
 void CuMatrixBase<Real>::Sigmoid(const CuMatrixBase<Real> &src) {
   KALDI_ASSERT(SameDim(*this, src));

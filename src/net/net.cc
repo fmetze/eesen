@@ -199,6 +199,12 @@ std::vector<int> Net::GetBlockSoftmaxDims() {
   return dynamic_cast<const BlockSoftmax*>(layers_[layers_.size()-1])->block_dims;
 }
 
+void Net::SetTemp(const float T) {
+  KALDI_ASSERT(layers_[layers_.size()-1]->GetType() == Layer::l_Softmax);
+  Softmax *sm = (dynamic_cast<Softmax*>(layers_[layers_.size()-1]));
+  sm->SetTemp(T);
+}
+
 void Net::AppendLayer(Layer* dynamically_allocated_layer) {
   // append,
   layers_.push_back(dynamically_allocated_layer);

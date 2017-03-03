@@ -137,8 +137,10 @@ class Net {
     }
   }
 
+  // Get dimensions of block softmax
   std::vector<int> GetBlockSoftmaxDims();
-
+  void SetTemp(const float T);
+  
  private:
   /// Vector which contains all the layers composing the neural network,
   /// the layers are for example: AffineTransform, Sigmoid, Softmax
