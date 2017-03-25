@@ -18,7 +18,8 @@
 # phoneme and character-based lexicons. 
 
 dict_type="phn"        # the type of lexicon, either "phn" or "char"
-space_char="<SPACE>"   # the character you have used to represent spaces
+space_char=            # the character you have used to represent spaces
+pron_prob=
 
 . utils/parse_options.sh 
 
@@ -80,15 +81,20 @@ word_disambig_symbol=`grep \#0 $dir/words.txt | awk '{print $2}'`
 
 case $dict_type in
   phn)
-     utils/make_lexicon_fst.pl --pron-probs $tmpdir/lexiconp_disambig.txt 0 "sil" '#'$ndisambig | \
+     [ -z "$pron_prob" ] && pron_prob=0
+     [ -z "$space_char" ] && space_char="sil" 
+     echo "Building a phone-based lexicon"
+     utils/make_lexicon_fst.pl --pron-probs $tmpdir/lexiconp_disambig.txt "$pron_prob" "$space_char" '#'$ndisambig | \
        fstcompile --isymbols=$dir/tokens.txt --osymbols=$dir/words.txt \
        --keep_isymbols=false --keep_osymbols=false |   \
        fstaddselfloops  "echo $token_disambig_symbol |" "echo $word_disambig_symbol |" | \
        fstarcsort --sort_type=olabel > $dir/L.fst || exit 1;
        ;;
-  char) 
+  char)
+     [ -z "$pron_prob" ] && pron_prob=0.5
+     [ -z "$space_char" ] && space_char="<space>"
      echo "Building a character-based lexicon, with $space_char as the space"
-     utils/make_lexicon_fst.pl --pron-probs $tmpdir/lexiconp_disambig.txt 0.5 "$space_char" '#'$ndisambig | \
+     utils/make_lexicon_fst.pl --pron-probs $tmpdir/lexiconp_disambig.txt "$pron_prob" "$space_char" '#'$ndisambig | \
        fstcompile --isymbols=$dir/tokens.txt --osymbols=$dir/words.txt \
        --keep_isymbols=false --keep_osymbols=false |   \
        fstaddselfloops  "echo $token_disambig_symbol |" "echo $word_disambig_symbol |" | \

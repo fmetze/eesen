@@ -199,6 +199,18 @@ std::vector<int> Net::GetBlockSoftmaxDims() {
   return dynamic_cast<const BlockSoftmax*>(layers_[layers_.size()-1])->block_dims;
 }
 
+void Net::SetTemp(const float T) {
+  KALDI_ASSERT(layers_[layers_.size()-1]->GetType() == Layer::l_Softmax ||
+	       layers_[layers_.size()-1]->GetType() == Layer::l_BlockSoftmax);
+  if (layers_[layers_.size()-1]->GetType() == Layer::l_Softmax) {
+    Softmax *sm = (dynamic_cast<Softmax*>(layers_[layers_.size()-1]));
+    sm->SetTemp(T);
+  } else if (layers_[layers_.size()-1]->GetType() == Layer::l_BlockSoftmax) {
+    BlockSoftmax *sm = (dynamic_cast<BlockSoftmax*>(layers_[layers_.size()-1]));
+    sm->SetTemp(T);
+  }
+}
+
 void Net::AppendLayer(Layer* dynamically_allocated_layer) {
   // append,
   layers_.push_back(dynamically_allocated_layer);
@@ -239,6 +251,17 @@ void Net::Init(const std::string &file) {
   Check();
 }
 
+void Net::Read(const std::string &file, bool convertparal) {
+  bool binary;
+  Input in(file, &binary);
+  Read(in.Stream(), binary, convertparal);
+  in.Close();
+  // Warn if the NN is empty
+  if(NumLayers() == 0) {
+    KALDI_WARN << "The network '" << file << "' is empty.";
+  }
+}
+  
 void Net::Read(const std::string &file) {
   bool binary;
   Input in(file, &binary);
@@ -250,6 +273,25 @@ void Net::Read(const std::string &file) {
   }
 }
 
+void Net::Read(std::istream &is, bool binary, bool convertparal) {
+  // get the network layers from a factory
+  Layer *layer;
+  while (NULL != (layer = Layer::Read(is, binary, convertparal))) {
+    if (NumLayers() > 0 && layers_.back()->OutputDim() != layer->InputDim()) {
+      KALDI_ERR << "Dimensionality mismatch!"
+                << " Previous layer output:" << layers_.back()->OutputDim()
+                << " Current layer input:" << layer->InputDim();
+    }
+    layers_.push_back(layer);
+  }
+  // create empty buffers
+  propagate_buf_.resize(NumLayers()+1);
+  backpropagate_buf_.resize(NumLayers()+1);
+  // reset learn rate
+  opts_.learn_rate = 0.0;
+
+  Check(); //check consistency (dims...)
+}
 
 void Net::Read(std::istream &is, bool binary) {
   // get the network layers from a factory
@@ -281,7 +323,6 @@ void Net::ReRead(const std::string &file) {
     KALDI_WARN << "The network '" << file << "' is empty.";
   }
 }
-
 
 void Net::ReRead(std::istream &is, bool binary) {
   // get the network layers from a factory

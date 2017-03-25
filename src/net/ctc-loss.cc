@@ -264,21 +264,25 @@ void Ctc::ErrorRateMSeq(const std::vector<int> &frame_num_utt, const CuMatrixBas
       continue;
     int32 num_frame = frame_num_utt[s];
     std::vector<int32> raw_hyp_seq(num_frame);
-    for (int32 f = 0; f < num_frame; f++) {
+    std::vector<int32> raw_hyp_frm(num_frame);
+    for (int32 f = 0; f < num_frame; f++)
       raw_hyp_seq[f] = data[f*num_seq + s];
-    }    
+    raw_hyp_frm[0] = 0;
     int32 i = 1, j = 1;
     while(j < num_frame) {
       if (raw_hyp_seq[j] != raw_hyp_seq[j-1]) {
         raw_hyp_seq[i] = raw_hyp_seq[j];
+	raw_hyp_frm[i] = j;
         i++;
       }
       j++;
     }
     std::vector<int32> hyp_seq(0);
+    std::vector<int32> hyp_frm(0);
     for (int32 n = 0; n < i; n++) {
       if (raw_hyp_seq[n] != 0) {
         hyp_seq.push_back(raw_hyp_seq[n]);
+        hyp_frm.push_back(raw_hyp_frm[n]);
       }
     }
     int32 err, ins, del, sub;
@@ -289,9 +293,13 @@ void Ctc::ErrorRateMSeq(const std::vector<int> &frame_num_utt, const CuMatrixBas
     ref_num_progress_ += label[s].size();
     
     if (out.length()) {
-      output << "dummy-utt";
+      // This is inefficient, but ok for now
+      Matrix<float> mat_host(net_out.NumRows(),net_out.NumCols());
+      net_out.CopyToMat(&mat_host);
+      // We output the index of the phone, the frame, and the probability
+      output << "utt";
       for (size_t index = 0; index < hyp_seq.size(); index ++)
-	output << " " << hyp_seq[index];
+	output << " | " << hyp_seq[index] << " " << hyp_frm[index] << " " << mat_host(hyp_frm[index]*num_seq+s,hyp_seq[index]);
       output << "\n";
     }
   }

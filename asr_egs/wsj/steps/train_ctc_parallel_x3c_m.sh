@@ -22,10 +22,6 @@ learn_rate=4e-5          # learning rate
 final_learn_rate=1e-6    # final learning rate
 momentum=0.9             # momentum
 
-# parallelization settings
-nj=4                     # number of jobs in parallel
-utts_per_avg=1000        # number of utterances per averaging step
-
 # learning rate schedule
 max_iters=25             # max number of iterations
 min_iters=               # min number of iterations
@@ -69,13 +65,17 @@ function shuffle_data() {
     local frame_num_limit=$3
     local dir=$4
     local tmpdir=$5
-    local nj=$6
     #
     mkdir -p $tmpdir/shuffle
     [ -f $tmpdir/train_local.org ] || cp $tmpdir/train_local.scp $tmpdir/train_local.org
     [ -f $tmpdir/cv_local.org    ] || cp $tmpdir/cv_local.scp    $tmpdir/cv_local.org
-    utils/prep_scps.sh --cp false --nj $nj --cmd "run.pl" --seed $iter \
+    utils/prep_scps.sh --cp false --nj 1 --cmd "run.pl" --seed $iter \
         $tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir
+    if false; then
+        mv $tmpdir/feats_tr.1.scp $tmpdir/train_local.scp
+	mv $tmpdir/feats_cv.1.scp $tmpdir/cv_local.scp
+	rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
+    fi
 }
 
 function prepare_features() {
@@ -141,8 +141,8 @@ function prepare_features() {
 	sed 's/^/1x/' $tmpdir/cv1local.scp >> $tmpdir/cv_local.scp
 	sed 's/^/2x/' $tmpdir/cv2local.scp >> $tmpdir/cv_local.scp
     
-	feats_tr="ark,s,cs:copy-feats scp:$tmpdir/shuffle/batch.tr.JOB.scp ark:- |"
-	feats_cv="ark,s,cs:copy-feats scp:$tmpdir/shuffle/batch.cv.JOB.scp ark:- |"
+	feats_tr="ark,s,cs:copy-feats scp:$tmpdir/shuffle/batch.tr.1.scp ark:- |"
+	feats_cv="ark,s,cs:copy-feats scp:$tmpdir/shuffle/batch.cv.1.scp ark:- |"
     
 	gzip -cd $dir/labels.tr.gz | sed 's/^/0x/'  > $tmpdir/labels.tr
 	gzip -cd $dir/labels.cv.gz | sed 's/^/0x/'  > $tmpdir/labels.cv
@@ -161,8 +161,8 @@ function prepare_features() {
 	#tmpdir=$(mktemp -d)
 	copy-feats "$feats_tr" ark,scp:$tmpdir/train.ark,$tmpdir/train_local.scp || exit 1;
 	copy-feats "$feats_cv" ark,scp:$tmpdir/cv.ark,$tmpdir/cv_local.scp || exit 1;
-	feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
-	feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
+	feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.scp ark:- |"
+	feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.scp ark:- |"
 	
 	#trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
     fi
@@ -173,7 +173,7 @@ function prepare_features() {
     fi
 
     # shuffle and partition the (current) data
-    shuffle_data $m $num_sequence $frame_num_limit $dir $tmpdir $nj
+    shuffle_data $m $num_sequence $frame_num_limit $dir $tmpdir
 
     # let's return the value of feats_tr and feats_cv
     echo "$feats_tr" > $trfile
@@ -229,7 +229,12 @@ echo $context_window > $dir/context_window
 #
 tmpdir=`mktemp -d`
 trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
-prepare_features $tmpdir/.tr $tmpdir/.cv 1 $tmpdir $tmpdir/T${start_epoch_num} $data_tr || exit 1;
+if [ $start_epoch_num -eq 1 ]; then
+    prepare_features $tmpdir/.tr $tmpdir/.cv 1 $tmpdir $tmpdir/T${start_epoch_num} $data_tr || exit 1;
+else
+    prepare_features $tmpdir/.tr $tmpdir/.cv $start_epoch_num \
+		     $tmpdir/X$start_epoch_num $tmpdir/T$start_epoch_num $augment_dirs || exit 1;
+fi
 feats_tr=`cat $tmpdir/.tr 2>/dev/null`
 feats_cv=`cat $tmpdir/.cv 2>/dev/null`
 ## End of feature setup
@@ -240,10 +245,6 @@ if [ ! -f $dir/nnet/nnet.iter0 ]; then
     net-initialize --binary=true --seed=$seed $dir/nnet.proto $dir/nnet/nnet.iter0 >& $dir/log/initialize_model.log || exit 1;
 fi
 if $block_softmax; then BS="--block-softmax=$block_softmax"; else BS=""; fi
-
-## create another tmp directory for the averaging operations
-mkdir -p $tmpdir/avg
-cp $dir/nnet/nnet.iter$[start_epoch_num-1] $tmpdir/avg || exit 1;
 
 ## main loop
 cur_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
@@ -263,36 +264,22 @@ for iter in $(seq $start_epoch_num $max_iters); do
 
     # train
     echo -n "EPOCH $iter RUNNING ... "
-    for JOB in `seq 1 $nj`; do
-	F=`echo $feats_tr|awk -v j=$JOB '{ sub("JOB", j); print $0 }'`
-	$train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
-            --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose $BS \
-            --num-jobs=$nj --job-id=$JOB \
-	    "$F" "$labels_tr" $tmpdir/avg/nnet.iter$[iter-1] $tmpdir/avg/nnet.iter${iter} \
-            >& $dir/log/tr.iter$iter.$JOB.log &
-	sleep 15
-    done
-    wait
-    cp $tmpdir/avg/nnet.iter$iter $dir/nnet
-    
+    $train_tool --report-step=$report_step --num-sequence=$num_sequence --frame-limit=$frame_num_limit \
+        --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose $BS \
+        "$feats_tr" "$labels_tr" $dir/nnet/nnet.iter$[iter-1] $dir/nnet/nnet.iter${iter} \
+        >& $dir/log/tr.iter$iter.log || exit 1;    
     end_time=`date | awk '{print $6 "-" $2 "-" $3 " " $4}'`
     echo -n "ENDS [$end_time]: "
     
-    tracc=$(grep -a "TOTAL TOKEN_ACCURACY" $dir/log/tr.iter${iter}.1.log | tail -n 1 | awk '{ acc=$4; gsub("%","",acc); print acc }')
+    tracc=$(grep -a "TOKEN_ACCURACY" $dir/log/tr.iter${iter}.log | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc }')
     echo -n "lrate $(printf "%.6g" $learn_rate), TRAIN ACCURACY $(printf "%.4f" $tracc)%, "
 
     # validation
-    for JOB in `seq 1 $nj`; do
-	F=`echo $feats_cv|awk -v j=$JOB '{ sub("JOB", j); print $0 }'`
-	$train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
-            --learn-rate=$learn_rate --momentum=$momentum --verbose=$verbose $BS --cross-validate=true \
-	    --num-jobs=$nj --job-id=$JOB \
-            "$F" "$labels_cv" $tmpdir/avg/nnet.iter${iter} \
-            >& $dir/log/cv.iter$iter.$JOB.log &
-	sleep 15
-    done
-    wait
-    cvacc=$(grep -a "TOTAL TOKEN_ACCURACY" $dir/log/cv.iter${iter}.1.log | tail -n 1 | awk '{ acc=$4; gsub("%","",acc); print acc }')
+    $train_tool --report-step=$report_step --num-sequence=$valid_num_sequence --frame-limit=$frame_num_limit \
+        --cross-validate=true --verbose=$verbose $BS \
+        "$feats_cv" "$labels_cv" $dir/nnet/nnet.iter${iter} \
+        >& $dir/log/cv.iter$iter.log || exit 1;
+    cvacc=$(grep -a "TOKEN_ACCURACY" $dir/log/cv.iter${iter}.log | tail -n 1 | awk '{ acc=$3; gsub("%","",acc); print acc }')
     echo "VALID ACCURACY $(printf "%.4f" $cvacc)%"
 
     # stopping criterion
@@ -321,8 +308,10 @@ for iter in $(seq $start_epoch_num $max_iters); do
     fi
 
     # put pre-computed features in place, remove old ones
-    feats_tr=`cat $tmpdir/.tr 2>/dev/null`
-    feats_cv=`cat $tmpdir/.cv 2>/dev/null`
+    wait
+    #echo feats_tr "$feats_tr"
+    feats_tr=`cat $tmpdir/.tr`
+    feats_cv=`cat $tmpdir/.cv`;# 2>/dev/null`
     rm -rf $tmpdir/T$iter
 
     # save the status

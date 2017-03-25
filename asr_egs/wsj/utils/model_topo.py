@@ -36,7 +36,10 @@ def common_args(n=-1, type="bilstm"):
         a += ' <LearnRateCoef> ' + str(s)
 
     if type == "lstm" or type == "bilstm":
-        a += ' <MaxGrad> 50.0'
+        if arguments.has_key('max-grad'):
+            a += ' <MaxGrad> '+arguments['max-grad']
+        else:
+            a += ' <MaxGrad> 50.0'
         if arguments.has_key('fgate_bias_init'):
             a += ' <FgateBias> ' + arguments['fgate_bias_init']
 
@@ -74,6 +77,8 @@ if __name__ == '__main__':
     --fgate-bias-init : float
         Initial value of the forget-gate bias. Not specifying this option means the forget-gate bias
         will be initialized randomly, in the same way as the other parameters. 
+    --max-grad : float
+        Maximum gradient
     --input-dim : int
         Reduce the input feature to a given dimensionality before passing to the LSTM.
         Optional.

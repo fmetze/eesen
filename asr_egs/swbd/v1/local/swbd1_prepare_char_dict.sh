@@ -8,6 +8,8 @@ mkdir -p $dir
 
 [ -f path.sh ] && . ./path.sh
 
+[ -f $phndir/lexicon1.txt ] || (echo please generate phone dictionary first && exit 1;)
+
 # Use the word list of the phoneme-based lexicon. Create the lexicon using characters.
 local/swbd1_map_words.pl -f 1 $phndir/lexicon1.txt | awk '{print $1}' | \
   perl -e 'while(<>){ chop; $str="$_"; foreach $p (split("", $_)) {$str="$str $p"}; print "$str\n";}' \

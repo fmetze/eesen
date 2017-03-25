@@ -32,6 +32,8 @@
 namespace eesen {
 
 class Softmax : public Layer {
+  float T_ = 1.0;
+  
  public:
   Softmax(int32 dim_in, int32 dim_out)
     : Layer(dim_in, dim_out)
@@ -45,7 +47,10 @@ class Softmax : public Layer {
 
   void PropagateFnc(const CuMatrixBase<BaseFloat> &in, CuMatrixBase<BaseFloat> *out) {
     // y = e^x_j/sum_j(e^x_j)
-    out->ApplySoftMaxPerRow(in);
+    if (T_ == 1.0)
+      out->ApplySoftMaxPerRow(in);
+    else
+      out->ApplySoftMaxPerRowTemp(in,T_);
   }
 
   void BackpropagateFnc(const CuMatrixBase<BaseFloat> &in, const CuMatrixBase<BaseFloat> &out,
@@ -57,13 +62,18 @@ class Softmax : public Layer {
     // respect to activations of last layer neurons)
     in_diff->CopyFromMat(out_diff);
   }
-  
+
+  void SetTemp(const float T) {
+    T_ = T;
+  }
 };
 
 class BlockSoftmax : public Layer {
+  float T_ = 1.0;
+
  public:
- BlockSoftmax(int32 dim_in, int32 dim_out)
-   : Layer(dim_in, dim_out)
+  BlockSoftmax(int32 dim_in, int32 dim_out)
+    : Layer(dim_in, dim_out)
     { }
   ~BlockSoftmax()
     { }
@@ -120,6 +130,10 @@ class BlockSoftmax : public Layer {
                         const CuMatrixBase<BaseFloat> &out_diff, CuMatrixBase<BaseFloat> *in_diff) {
     // copy the error derivative:
     in_diff->CopyFromMat(out_diff);
+  }
+
+  void SetTemp(const float T) {
+    T_ = T;
   }
 
   std::string Info() const {

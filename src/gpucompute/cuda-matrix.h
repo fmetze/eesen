@@ -189,6 +189,7 @@ class CuMatrixBase {
 
   /// Apply softmax to each row
   void ApplySoftMaxPerRow(const CuMatrixBase<Real> &src);
+  void ApplySoftMaxPerRowTemp(const CuMatrixBase<Real> &src, const Real T);
 
   /// Apply the sigmoid function to each element: x = 1 / (1 + exp(-x))
   void Sigmoid(const CuMatrixBase<Real> &src);

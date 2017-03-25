@@ -49,6 +49,9 @@ int main(int argc, char *argv[]) {
     int blockid = -1;
     po.Register("blockid", &blockid, "Which block are you decoding? Ignore if you don't use block softmax");
 
+    float temp = 1.0;
+    po.Register("temperature", &temp, "Temperature of the output distribution");
+
     std::string use_gpu="no";
     po.Register("use-gpu", &use_gpu, "yes|no|optional, only has effect if compiled with CUDA"); 
 
@@ -73,18 +76,20 @@ int main(int argc, char *argv[]) {
 #endif
 
     Net net;
-    net.Read(model_filename);
+    net.Read(model_filename, true);
 
     std::vector<int> block_softmax_dims(0);
-    if (blockid != -1)
+    if (blockid != -1) {
       block_softmax_dims = net.GetBlockSoftmaxDims();
-
-    KALDI_LOG << "NUMBER OF BLOCKS " << block_softmax_dims.size();
-    KALDI_LOG << "blockid " << blockid;
+      KALDI_LOG << "Extracting block " << blockid << " of " << block_softmax_dims.size();
+    }
 
     // Load the counts of the labels/targets, will be used to scale the softmax-layer
     // outputs for ASR decoding
     ClassPrior class_prior(prior_opts);
+
+    // Set the temperature
+    net.SetTemp(temp);
 
     eesen::int64 tot_t = 0;   // Keep track of how many frames/data points have been processed
 
@@ -99,6 +104,8 @@ int main(int argc, char *argv[]) {
 
     // Iterate over all sequences
     for (; !feature_reader.Done(); feature_reader.Next()) {
+      const Matrix<BaseFloat> &mat = feature_reader.Value();
+      /*
       Vector<BaseFloat> oneVec(1, kSetZero); 
       oneVec.ReplaceValue(0, 1);
 			
@@ -109,10 +116,11 @@ int main(int argc, char *argv[]) {
 	mat.Row(i).Range(0, vec_tmp.NumCols()).CopyFromVec(vec_tmp.Row(i));
 	mat.Row(i).Range(vec_tmp.NumCols() + blockid, 1).CopyFromVec(oneVec);
       }
-      
+      */
+
       // Feed the sequence to the network for a feedforward pass
       net.Feedforward(CuMatrix<BaseFloat>(mat), &net_out);
-
+      
       // Convert posteriors to log-scale, if needed
       if (apply_log) {
         net_out.ApplyLog();
