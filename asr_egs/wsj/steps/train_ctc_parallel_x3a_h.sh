@@ -51,6 +51,7 @@ subsample_feats=false    # whether to subsample features
 norm_vars=true           # whether to apply variance normalization when we do cmn
 add_deltas=true          # whether to add deltas
 copy_feats=true          # whether to copy features into a local dir (on the GPU machine)
+shuffle=true
 
 # status of learning rate schedule; useful when training is resumed from a break point
 cvacc=0
@@ -161,7 +162,7 @@ if $subsample_feats; then
   labels_tr="ark:cat $tmpdir/labels.tr|"
   labels_cv="ark:cat $tmpdir/labels.cv|"
 
-  #trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+  trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
 
 elif $copy_feats; then
   # Save the features to a local dir on the GPU machine. On Linux, this usually points to /tmp
@@ -171,13 +172,14 @@ elif $copy_feats; then
   feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.JOB.scp ark:- |"
   feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.JOB.scp ark:- |"
 
-  #trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+  trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
 fi
 
 if $add_deltas; then
     feats_tr="$feats_tr add-deltas ark:- ark:- |"
     feats_cv="$feats_cv add-deltas ark:- ark:- |"
 fi
+$shuffle && prep="utils/prep_scps.sh" || prep="utils/prep_scps_noshuffle.sh"
 ## End of feature setup
 
 # Initialize model parameters
@@ -201,11 +203,11 @@ for iter in $(seq $start_epoch_num $max_iters); do
     pvacc=$cvacc
 
     # distribute and shuffle the data for this iteration
-    utils/prep_scps.sh --nj $nj --cmd "run.pl" --seed $iter \
+    $prep --nj $nj --cmd "run.pl" --seed $iter \
 	$tmpdir/train_local.org $tmpdir/cv_local.org $num_sequence $frame_num_limit $tmpdir/shuffle $tmpdir >& \
         $dir/log/shuffle.iter$iter.log || exit 1;
     rm $tmpdir/batch.tr.list  $tmpdir/batch.cv.list
-    
+
     # train
     echo -n "EPOCH $iter RUNNING ... "
     for JOB in `seq 1 $nj`; do

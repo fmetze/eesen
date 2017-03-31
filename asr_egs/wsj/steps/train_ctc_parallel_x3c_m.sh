@@ -90,8 +90,12 @@ function prepare_features() {
 
     # do we do data augmentation?
     if [ ! -d $targetdir ]; then
-	utils/mix_data_dirs.sh $m $data_tr $targetdir $sources >& $dir/log/mix.iter${m}.log || exit 1;
-	local data_tr=$targetdir
+        if [ `echo "$sources"|wc -w` -gt 1 ]; then
+	    utils/mix_data_dirs.sh $m $data_tr $targetdir $sources >& $dir/log/mix.iter${m}.log || exit 1;
+	    local data_tr=$targetdir
+	else
+	    local data_tr=$sources
+	fi
     fi
 
     if $sort_by_len; then
@@ -154,7 +158,7 @@ function prepare_features() {
 	#labels_tr="ark:cat $tmpdir/labels.tr|"
 	#labels_cv="ark:cat $tmpdir/labels.cv|"
     
-	#trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+	trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
     
     elif $copy_feats; then
 	# Save the features to a local dir on the GPU machine. On Linux, this usually points to /tmp
@@ -164,7 +168,7 @@ function prepare_features() {
 	feats_tr="ark,s,cs:copy-feats scp:$tmpdir/feats_tr.scp ark:- |"
 	feats_cv="ark,s,cs:copy-feats scp:$tmpdir/feats_cv.scp ark:- |"
 	
-	#trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
+	trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
     fi
 
     if $add_deltas; then
@@ -230,7 +234,7 @@ echo $context_window > $dir/context_window
 tmpdir=`mktemp -d`
 trap "echo \"Removing features tmpdir $tmpdir @ $(hostname)\"; rm -r $tmpdir" EXIT
 if [ $start_epoch_num -eq 1 ]; then
-    prepare_features $tmpdir/.tr $tmpdir/.cv 1 $tmpdir $tmpdir/T${start_epoch_num} $data_tr || exit 1;
+    prepare_features $tmpdir/.tr $tmpdir/.cv 1 $tmpdir $tmpdir/T$start_epoch_num $data_tr || exit 1;
 else
     prepare_features $tmpdir/.tr $tmpdir/.cv $start_epoch_num \
 		     $tmpdir/X$start_epoch_num $tmpdir/T$start_epoch_num $augment_dirs || exit 1;
