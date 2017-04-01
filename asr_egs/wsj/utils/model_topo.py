@@ -130,7 +130,7 @@ if __name__ == '__main__':
     learn_rate_slope = 0.0
     if arguments.has_key('learn_rate_slope'):
         learn_rate_slope = float(arguments['learn_rate_slope'])
-    affine_learn_rate = 0.0
+    affine_learn_rate = 1.0
     if arguments.has_key('affine_learn_rate'):
         affine_learn_rate = float(arguments['affine_learn_rate'])
 
