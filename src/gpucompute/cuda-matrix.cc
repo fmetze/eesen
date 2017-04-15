@@ -682,7 +682,7 @@ void CuMatrixBase<Real>::ApplySoftMaxPerRowTemp(const CuMatrixBase<Real> &src, c
     mat.CopyFromMat(src.Mat());
     KALDI_ASSERT(T>0.0);
     for(MatrixIndexT r = 0; r < mat.NumRows(); r++) {
-      mat.Row(r).Scale(1.0/T);
+      mat.Row(r).Scale(T);
       mat.Row(r).ApplySoftMax();
     }
   }

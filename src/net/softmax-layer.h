@@ -69,9 +69,11 @@ class Softmax : public Layer {
 };
 
 class BlockSoftmax : public Layer {
- public:
- BlockSoftmax(int32 dim_in, int32 dim_out)
-   : Layer(dim_in, dim_out)
+  float T_ = 1.0;
+
+  public:
+  BlockSoftmax(int32 dim_in, int32 dim_out)
+    : Layer(dim_in, dim_out)
     { }
   ~BlockSoftmax()
     { }
@@ -91,6 +93,7 @@ class BlockSoftmax : public Layer {
                      << " (BlockDims)";
       is >> std::ws; // eat-up whitespace
     }
+    KALDI_LOG << "Block" << dims_str;
     // parse dims,
     if (!eesen::SplitStringToIntegers(dims_str, ",:", false, &block_dims))
       KALDI_ERR << "Invalid block-dims " << dims_str;
@@ -120,7 +123,11 @@ class BlockSoftmax : public Layer {
       CuSubMatrix<BaseFloat> in_bl = in.ColRange(block_offset[bl], block_dims[bl]);
       CuSubMatrix<BaseFloat> out_bl = out->ColRange(block_offset[bl], block_dims[bl]);
       // y = e^x_j/sum_j(e^x_j)
-      out_bl.ApplySoftMaxPerRow(in_bl);
+      if (T_ == 1.0)
+        out_bl.ApplySoftMaxPerRow(in_bl);
+      else
+        out_bl.ApplySoftMaxPerRowTemp(in_bl,T_);
+      //out_bl.ApplySoftMaxPerRow(in_bl);
     }
   }
 
@@ -128,6 +135,10 @@ class BlockSoftmax : public Layer {
                         const CuMatrixBase<BaseFloat> &out_diff, CuMatrixBase<BaseFloat> *in_diff) {
     // copy the error derivative:
     in_diff->CopyFromMat(out_diff);
+  }
+
+  void SetTemp(const float T) {
+    T_ = T;
   }
 
   std::string Info() const {

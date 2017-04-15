@@ -76,14 +76,13 @@ int main(int argc, char *argv[]) {
 #endif
 
     Net net;
-    net.Read(model_filename);
+    net.Read(model_filename, true);
 
     std::vector<int> block_softmax_dims(0);
-    if (blockid != -1)
+    if (blockid != -1) {
       block_softmax_dims = net.GetBlockSoftmaxDims();
-
-    KALDI_LOG << "NUMBER OF BLOCKS " << block_softmax_dims.size();
-    KALDI_LOG << "blockid " << blockid;
+      KALDI_LOG << "Extracting block " << blockid << " of " << block_softmax_dims.size();
+    }
 
     // Load the counts of the labels/targets, will be used to scale the softmax-layer
     // outputs for ASR decoding
@@ -105,16 +104,7 @@ int main(int argc, char *argv[]) {
 
     // Iterate over all sequences
     for (; !feature_reader.Done(); feature_reader.Next()) {
-      Vector<BaseFloat> oneVec(1, kSetZero); 
-      oneVec.ReplaceValue(0, 1);
-			
-      const Matrix<BaseFloat> &vec_tmp = feature_reader.Value();
-      Matrix<BaseFloat> mat(vec_tmp.NumRows(), vec_tmp.NumCols() + block_softmax_dims.size(), kSetZero);
-
-      for(int i = 0; i < vec_tmp.NumRows(); i++){
-	mat.Row(i).Range(0, vec_tmp.NumCols()).CopyFromVec(vec_tmp.Row(i));
-	mat.Row(i).Range(vec_tmp.NumCols() + blockid, 1).CopyFromVec(oneVec);
-      }
+      const Matrix<BaseFloat> &mat = feature_reader.Value();
       
       // Feed the sequence to the network for a feedforward pass
       net.Feedforward(CuMatrix<BaseFloat>(mat), &net_out);
